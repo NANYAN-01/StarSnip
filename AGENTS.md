@@ -19,6 +19,8 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
 .venv\Scripts\python -m starsnip --check      # 检查 Ollama 并列出模型（先跑这个）
 .venv\Scripts\python -m starsnip --file a.png
 .venv\Scripts\python -m starsnip --diagnose   # 后端/托盘/热键体检，写日志
+.venv\Scripts\python -m starsnip --settings   # 直接打开设置窗口（逐界面体检用）
+.venv\Scripts\python -m starsnip --history    # 直接打开历史记录
 .venv\Scripts\python -m starsnip --mcp        # MCP stdio（需 mcp<2）
 ```
 
@@ -32,8 +34,15 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
   跑测试仍需 `$env:PYTHONPATH="src"`（或经 venv）。
   - 单个：`.venv\Scripts\python tests\test_tablefmt.py`
   - 全量：`Get-ChildItem tests\test_*.py | % { .venv\Scripts\python $_.FullName }`
-- 离线纯逻辑：`test_png` `test_tablefmt` `test_writers` `test_history` `test_logger`。
+- 离线纯逻辑：`test_png` `test_tablefmt` `test_writers` `test_history` `test_logger` `test_imgconv`。
+- 界面结构自检：`test_ui_smoke`（逐个窗口校验字段已布局、按钮回调连通、Toast 文字不越界、遮罩压暗块坐标、贴图/美化），`test_overlay` `test_toast` `test_history_ui` `test_hotkey_settings`。
+- 静态自检：`tools\_check_undefined.py` 扫 `self.xxx` 被引用但未定义/未赋值（含 `on_export=self._export_file` 这类回调传参），能抓出「启动即崩/按钮点了报错」类缺陷；元组拆包赋值（`self.a, self.b = ...`）会误报，需人工确认。
 - `test_capture`/`test_clipboard` 走 GDI/剪贴板，不弹窗；剪贴板偶发 `clipboard busy` 属外部占用，运行时有 try/except 兜底，非缺陷。
+- **DPI 铁律**：`capture.enable_dpi_awareness()` 必须在创建 Tk 根窗口**之前**调用（`__main__._run_gui` 已做）。否则 Tk 按虚拟化坐标工作（150% 时把 2560×1600 当 1707×1067），全屏遮罩、Toast 定位、鼠标与截图坐标全部错位。
+- **Tk 单线程铁律**：任何后台线程都不得直接调 `after()/configure()/insert()`；一律 `queue.Queue` 丢结果、主线程 `after` 轮询消费（设置里的模型列表、OCR 结果都是这个模式）。跨线程调用会抛 `RuntimeError: main thread is not in main loop`。
+- **配置文件 BOM**：读取一律 `encoding="utf-8-sig"`。记事本/PowerShell 写出的 BOM 会让 `json.load` 抛错，配合兜底就会被静默丢弃（表现为「本地配置整段失效」）。
+- **主题即时生效**：`theme.apply_theme()` 会通知 `theme.on_theme_change()` 注册的回调；`ttk.Treeview` 不跟随 CTk 外观模式，窗口创建时要注册重刷（结果窗口 / 历史窗口已做）。
+- **CTk 布局坑**：`CTkScrollableFrame` 内部会套一层 Frame+Canvas，取子控件要用递归查找；`tk.Canvas` 的 `create_rectangle` 不支持 `radius=`，`create_text` 不支持 `bbox`/`bg`（要圆角用 `create_polygon(smooth=True)`，要底色另画矩形）——写错会直接抛 TclError，导致「按热键没反应」。
 - 需要真实桌面会话（创建窗口/注册热键，勿在他人工作中途自动跑）：`test_tray` `test_hotkey` `test_overlay` `test_toast` `test_history_ui` `test_e2e`。
 - 需要 Ollama：`test_ocr_core` `test_export` `test_e2e`。
 - 测试会占用 `ctrl+alt+o`；先结束正在运行的 `pythonw`/`StarSnip` 实例。
@@ -55,7 +64,8 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
 - AI 排版/翻译：`ai_writer.llm_layout` 与 `ai_writer.translate` **必须保留 `think:False`**（qwen3.5 默认思考会让排版 ~4s 变 ~65s）。翻译自动判中↔英，模型用 `translate_model or layout_model`。
 - 新功能模块：`pin.py`（贴图，tk+PIL 帧）、`beautify.py`（圆角/阴影/留白分享图，Pillow）、`imgconv.py`（截图↔Pillow，raw `BGRX`/`BGRX` 编解码）、`settings_ui.py`（设置中心）。
 - 结果窗口导出映射：docx/txt/xlsx/md → `on_export`；png → `on_beautify`。`_translate` 在「译文」与原文间切换（依赖 `ResultWindow._orig_text/_trans_text/_showing_translation`）。
-- 配置：`config.load()` 用 `DEFAULTS` 合并根 `config.json`；改单项用 `config.save_setting`（保留其它键）。新增键：`theme/translate_model/pin_alpha/beautify_bg/beautify_pad_ratio`（DEFAULTS 与 config.json 都要有）。`sys.frozen` 时配置在 exe 同目录。
+- 配置：`config.load()` 用 `DEFAULTS` 合并根 `config.json`；改单项用 `config.save_setting`（保留其它键）。新增键：`theme/translate_model/pin_alpha/beautify_bg/beautify_pad_ratio/auto_ocr`（DEFAULTS 与 config.json 都要有）。`sys.frozen` 时配置在 exe 同目录。
+- **隐私铁律**：仓库里的 `config.json` 只放占位值（`ollama_url` 为 `http://127.0.0.1:11434`）。真实内网地址/个人路径写 `config.local.json`（已 gitignore，与 `config.json` 同目录，加载时覆盖它；`save_setting` 也会写它）。**任何提交前先 `git grep -n 172.16` 自查，禁止把内网 IP、主机名、机构信息写进受版本控制的文件。**
 - 路径集中在 `paths.py`：数据目录 `%APPDATA%\StarSnip`（`STARSNIP_HOME`，兼容旧 `SCREENOCR_HOME`；新目录不存在且旧 `ScreenOCR` 目录存在时沿用旧目录，保历史）；日志 `starsnip.log`；截图 `图片\StarSnip`；导出 `文档\StarSnip`。
 - 环境变量：`OLLAMA_URL`、`OLLAMA_MODEL`、`STARSNIP_HOME`。
 
@@ -65,4 +75,5 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
 - 无 lint/formatter/typecheck/CI；风格：4 空格、`%` 格式化、有意兜底异常标 `# noqa: BLE001`。
 - MCP 需 `mcp<2`，按需导入。应用 MCP 是 `src/starsnip/mcp_server.py`；`ocr/` 目录是早期 PRD/压测/另一旧 MCP，非运行时。
 - 同一用户不能同时跑两个实例（全局热键冲突）。
+- **两个全局热键**：`hotkey`（默认 `ctrl+2`，截图+识别）与 `hotkey_capture_only`（默认 `ctrl+1`，仅截图）。`App._start_hotkey` 各起一个 `HotkeyManager`（独立线程，热键 id 互不冲突）；仅截图走 `SelectionOverlay(confirm=True)`，拖完停留、点 ✓/回车才交付。改热键用 `_apply_hotkey(spec, "ocr"|"capture")`。
 - 品牌：中文「星剪」，英文/代码名「StarSnip」，包名 `starsnip`。`docs/开发计划.md`、`docs/工作日志.md` 含历史 `D:\030\screenocr` 路径，与代码冲突时以代码/README 为准。

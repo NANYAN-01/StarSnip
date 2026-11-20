@@ -16,6 +16,8 @@
 在浮窗里编辑、复制，一键**翻译**、**贴图钉屏**、生成**美化分享图**，或经 AI 排版导出为
 Word / TXT / XLSX / Markdown。识别与排版走后端 Ollama（默认本机 `http://127.0.0.1:11434`，可在设置里改成你自己的主机），可离线、可换模型。
 
+默认两个热键：**`Ctrl+2` 截图并识别**；**`Ctrl+1` 只截图**（拖完停留，点 ✓ 才保存/进剪贴板，点 ✕ 放弃）。两个热键都能在设置里改。
+
 > 本项目由早期的个人工具 ScreenOCR 全面改版而来：重命名、UI 重写、新增功能、统一设计系统。
 
 ## 界面预览
@@ -74,6 +76,10 @@ set PYTHONPATH=src
 后端：安装并启动 [Ollama](https://ollama.com)，拉取一个视觉模型（如 `glm-ocr`）与一个
 通用模型（如 `qwen3.5:4b`），在设置或 `config.json` 中配置 `ollama_url`。
 
+> 后端在内网/远程机器上？把地址写进同目录的 `config.local.json`（该文件已 gitignore，只在
+> 本机生效、不会被提交），例如 `{"ollama_url": "http://<你的主机>:11434"}`。它覆盖
+> `config.json` 里的同名键；设置窗口保存时也会写这个文件，仓库里的 `config.json` 始终保持默认占位值。
+
 ## 打包为单文件 exe
 
 ```bat
@@ -86,17 +92,19 @@ tools\build_exe.bat        :: 产出 dist\StarSnip.exe，并复制 config.json �
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `ollama_url` | `http://127.0.0.1:11434` | Ollama 后端地址（改为你自己的 Ollama 主机） |
+| `ollama_url` | `http://127.0.0.1:11434` | Ollama 后端地址（真实内网地址建议放 `config.local.json`，避免提交进仓库） |
 | `default_model` | `glm-ocr:latest` | OCR 识别模型 |
 | `layout_model` | `qwen3.5:4b` | AI 排版 / 翻译模型（强制 `think:false`） |
 | `theme` | `system` | 界面主题：`system`/`light`/`dark` |
-| `hotkey` | `ctrl+alt+o` | 全局截图热键 |
+| `hotkey` | `ctrl+2` | 全局热键：截图并 OCR 识别 |
+| `hotkey_capture_only` | `ctrl+1` | 全局热键：仅截图（拖完停留，✓ 保存 / ✕ 放弃） |
 | `verify_models` / `joint_models` | glm-ocr + unlimited-ocr | 校验 / 联合识别模型 |
 | `joint_enabled` | `false` | 联合识别开关 |
 | `max_side_px` | `1280` | 送识别长边上限 |
 | `timeout_s` / `layout_timeout` | 60 / 120 | 识别 / 排版超时 |
 | `keep_alive` | `30m` | Ollama 模型保活 |
 | `save_image` / `image_dir` | `true` / `""` | 截图保存与目录（空=`图片\StarSnip`） |
+| `auto_ocr` | `true` | 截图后自动识别；关闭 = 只截图/存剪贴板（托盘菜单另有「仅截图（不识别）」） |
 | `clipboard_image` | `true` | 截图写入系统剪贴板 |
 | `toast_ms` | `2000` | 轻提示停留毫秒 |
 | `export_dir` | `""` | 导出目录（空=`文档\StarSnip`） |

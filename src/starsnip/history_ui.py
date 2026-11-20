@@ -1,7 +1,6 @@
 """历史记录浏览窗口（customtkinter 重设计）。"""
 
 import os
-import tkinter as tk
 from tkinter import ttk, messagebox
 
 import customtkinter as ctk
@@ -24,6 +23,14 @@ class HistoryWindow(ctk.CTkToplevel):
         self._build()
         self.bind("<Escape>", lambda e: self.destroy())
         self.reload()
+        theme.on_theme_change(self._restyle)
+
+    def _restyle(self):
+        try:
+            if self.winfo_exists():
+                _style_tree()
+        except Exception:  # noqa: BLE001 - 窗口已销毁
+            pass
 
     def _build(self):
         root = ctk.CTkFrame(self, fg_color="transparent")
@@ -39,13 +46,16 @@ class HistoryWindow(ctk.CTkToplevel):
 
         tools = ctk.CTkFrame(root, fg_color="transparent")
         tools.pack(fill="x", pady=(12, 8))
-        self.search_var = tk.StringVar()
-        entry = ctk.CTkEntry(tools, textvariable=self.search_var, width=260,
-                             height=theme.CONTROL_H, corner_radius=theme.RADIUS_SM,
-                             font=self._F.body, placeholder_text="搜索文字 / 模型…",
-                             border_width=1, border_color=theme.SEPARATOR)
-        entry.pack(side="left")
-        entry.bind("<Return>", lambda e: self.reload())
+        # 注意：CTkEntry 的 placeholder_text 与 textvariable 同时用会失效（CTk 的已知行为），
+        # 所以这里不用 StringVar，直接读输入框内容，搜索提示才能真正显示。
+        self.search_entry = ctk.CTkEntry(
+            tools, width=260, height=theme.CONTROL_H,
+            corner_radius=theme.RADIUS_SM, font=self._F.body,
+            placeholder_text="搜索文字 / 模型…",
+            placeholder_text_color=theme.FG_SECONDARY,
+            border_width=1, border_color=theme.SEPARATOR)
+        self.search_entry.pack(side="left")
+        self.search_entry.bind("<Return>", lambda e: self.reload())
         ctk.CTkButton(tools, text="搜索", width=70, height=theme.CONTROL_H,
                       corner_radius=theme.RADIUS_SM, fg_color=theme.ACCENT,
                       command=self.reload).pack(side="left", padx=8)
@@ -67,10 +77,14 @@ class HistoryWindow(ctk.CTkToplevel):
         columns = ("time", "model", "ms", "preview")
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings",
                                  selectmode="browse", style="Snip.Treeview")
-        for col, title, width in (("time", "时间", 150), ("model", "模型", 150),
-                                  ("ms", "耗时", 70), ("preview", "内容", 360)):
+        for col, title, width, stretch in (("time", "时间", 130, False),
+                                           ("model", "模型", 150, False),
+                                           ("ms", "耗时", 70, False),
+                                           ("preview", "内容", 360, True)):
             self.tree.heading(col, text=title)
-            self.tree.column(col, width=width, anchor="w")
+            # 只有预览列自适应拉伸，其余定宽（时间列按「11-20 14:15」格式化后 130 足够）
+            self.tree.column(col, width=width, minwidth=60, anchor="w",
+                             stretch=stretch)
         vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
@@ -110,18 +124,21 @@ class HistoryWindow(ctk.CTkToplevel):
                       command=self.destroy).pack(side="right")
 
     def reload(self, _event=None):
-        rows = self.history.search(self.search_var.get().strip())
+        rows = self.history.search(self.search_entry.get().strip())
         self.tree.delete(*self.tree.get_children())
         self._rows = {}
         for row in rows:
             preview = (row["text"] or "").replace("\n", " ")
-            if len(preview) > 90:
-                preview = preview[:90] + "…"
+            if len(preview) > 30:
+                preview = preview[:30] + "…"
             iid = str(row["id"])
             self._rows[iid] = row
+            # 时间只留「MM-DD HH:MM」，避免窄列被裁
+            created = (row["created_at"] or "").replace("T", " ")
+            short_time = created[5:16] if len(created) >= 16 else created
             self.tree.insert("", "end", iid=iid,
-                             values=(row["created_at"].replace("T", " "),
-                                     row["model"], row["elapsed_ms"], preview))
+                             values=(short_time, row["model"],
+                                     row["elapsed_ms"], preview))
 
     def _selected(self):
         sel = self.tree.selection()
@@ -141,7 +158,7 @@ class HistoryWindow(ctk.CTkToplevel):
         if not path or not os.path.isfile(path):
             self.thumb.configure(image="", text="（无缩略图）")
             return
-        img, w, h = theme.photo(path, (240, 150))
+        img, w, h = theme.thumb_image(path, (240, 150))
         if img is None:
             self.thumb.configure(image="", text="（无法显示缩略图）")
             return

@@ -129,3 +129,16 @@ def disagreements(primary_text: str, other_texts) -> set:
 def time_ms() -> float:
     import time
     return time.time() * 1000.0
+
+
+def list_models(url: str, timeout: float = 6.0) -> list:
+    """列出后端可用模型名（用于设置里的下拉选择）。失败返回 []。"""
+    try:
+        req = urllib.request.Request(url.rstrip("/") + "/api/tags",
+                                     headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 - 后端不可用时只是没得选
+        return []
+    names = [m.get("name") for m in (data.get("models") or []) if m.get("name")]
+    return sorted(names)

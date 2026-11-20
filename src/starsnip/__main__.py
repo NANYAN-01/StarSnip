@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import time
+import traceback
 import urllib.request
 
 import customtkinter as ctk
@@ -18,6 +19,71 @@ def _http_json(url: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _fatal(exc: BaseException) -> None:
+    """GUI 启动失败兜底：写日志 + 弹窗。
+
+    打包成窗口程序（console=False）后没有 stderr，异常会静默消失，
+    表现就是「双击 exe 毫无反应」，所以这里必须留下可查的痕迹。
+    """
+    from .logger import Logger
+    log = Logger()
+    try:
+        log.info("FATAL %s: %s" % (type(exc).__name__, exc))
+        log.info("".join(traceback.format_exception(
+            type(exc), exc, exc.__traceback__)))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import tkinter.messagebox as mb
+        mb.showerror("星剪 StarSnip 启动失败",
+                     "%s: %s\n\n日志：%s" % (type(exc).__name__, exc, log.path))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _run_gui(cfg: dict, args) -> int:
+    """GUI 模式：以 customtkinter 根窗口驱动（隐藏，由托盘/热键唤起）。
+
+    DPI 感知必须在创建 Tk 根窗口之前声明：否则 Tk 会按「虚拟化」坐标工作
+    （例如 150% 缩放时把 2560×1600 当成 1707×1067），全屏遮罩与 Toast 定位
+    都会偏；截图坐标也会和鼠标坐标不一致。
+    """
+    capture.enable_dpi_awareness()
+    ctk.set_default_color_theme("blue")
+    root = ctk.CTk()
+    root.title("星剪 StarSnip")
+    root.withdraw()
+    app = App(root, cfg)
+
+    if args.history:
+        app.open_history()
+        root.mainloop()
+        return 0
+
+    if args.settings:
+        app.open_settings()
+        root.mainloop()
+        return 0
+
+    if args.file:
+        app.busy = True
+        app.open_file(args.file)
+        root.mainloop()
+        return 0
+
+    app.start()
+    print("星剪 StarSnip 已启动：按 %s 截图识别，Esc 取消，托盘右键可设置。"
+          % cfg["hotkey"])
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if app.hotkey:
+            app.hotkey.stop()
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="starsnip",
@@ -27,8 +93,12 @@ def main(argv=None) -> int:
                         help="截取整个虚拟屏幕保存为 PNG（验证截图链路）")
     parser.add_argument("--check", action="store_true",
                         help="检查 Ollama 服务连通性并列出模型")
+    parser.add_argument("--models", action="store_true",
+                        help="只列出后端可用模型（设置里下拉框同源）")
     parser.add_argument("--history", action="store_true",
                         help="直接打开历史记录窗口")
+    parser.add_argument("--settings", action="store_true",
+                        help="直接打开设置窗口")
     parser.add_argument("--mcp", action="store_true",
                         help="以 MCP stdio 服务运行（需 mcp<2）")
     parser.add_argument("--tray-test", action="store_true",
@@ -96,6 +166,18 @@ def main(argv=None) -> int:
         print(report)
         return 0 if (tray_ok and hk_ok) else 3
 
+    if args.models:
+        from . import ocr_core
+        url = cfg["ollama_url"]
+        names = ocr_core.list_models(url)
+        if not names:
+            print("无法从 %s 获取模型列表（后端不可用？）" % url)
+            return 2
+        print("后端 %s 共 %d 个模型（设置里的下拉框同源）：" % (url, len(names)))
+        for name in names:
+            print("  %s" % name)
+        return 0
+
     if args.check:
         try:
             version = _http_json(cfg["ollama_url"] + "/api/version")
@@ -120,34 +202,11 @@ def main(argv=None) -> int:
         return 0
 
     # GUI 模式：以 customtkinter 根窗口驱动（隐藏，由托盘/热键唤起）
-    ctk.set_default_color_theme("blue")
-    root = ctk.CTk()
-    root.title("星剪 StarSnip")
-    root.withdraw()
-    app = App(root, cfg)
-
-    if args.history:
-        app.open_history()
-        root.mainloop()
-        return 0
-
-    if args.file:
-        app.busy = True
-        app.open_file(args.file)
-        root.mainloop()
-        return 0
-
-    app.start()
-    print("星剪 StarSnip 已启动：按 %s 截图识别，Esc 取消，托盘右键可设置。"
-          % cfg["hotkey"])
     try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if app.hotkey:
-            app.hotkey.stop()
-    return 0
+        return _run_gui(cfg, args)
+    except Exception as exc:  # noqa: BLE001
+        _fatal(exc)
+        return 1
 
 
 if __name__ == "__main__":

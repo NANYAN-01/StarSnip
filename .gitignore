@@ -29,5 +29,8 @@ tools/_icon_tmp/
 tools/_shots/
 fixtures/_capture_*.png
 
+# 本地私密配置（真实内网地址、个人路径等；只在本机生效，永不入库）
+config.local.json
+
 # 旧实验/压测目录（含内网主机信息，不公开）
 ocr/

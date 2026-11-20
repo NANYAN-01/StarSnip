@@ -45,9 +45,15 @@ CFG = {"hotkey": "ctrl+alt+o", "default_model": "glm-ocr:latest",
 
 def shot(win, name):
     win.update_idletasks()
-    win.update()
-    for _ in range(3):
+    # 必须置顶再截图：否则截到的是被别的窗口遮住的桌面内容
+    try:
+        win.attributes("-topmost", True)
+        win.deiconify()
         win.lift()
+        win.focus_force()
+    except Exception:  # noqa: BLE001
+        pass
+    for _ in range(6):
         win.update()
     capture.enable_dpi_awareness()
     x, y = win.winfo_rootx(), win.winfo_rooty()
@@ -64,6 +70,7 @@ def shot(win, name):
 
 def main():
     appearance = "dark"
+    capture.enable_dpi_awareness()   # 与真实启动一致：建根窗口前声明 DPI 感知
     theme.apply_theme(appearance)
     root = ctk.CTk()
     root.withdraw()
@@ -126,7 +133,34 @@ def main():
     hk.geometry("+360+160")
     shot(hk, "06_hotkey_dark")
 
-    # 7) Toast（深色 HUD）
+    # 7) 取景遮罩：铺截屏 + 压暗 + 选区 + 尺寸标签
+    from starsnip.overlay import SelectionOverlay
+    ov_img = capture.capture_screen()
+    ov = SelectionOverlay(root, (120, 90, 760, 460),
+                          on_select=lambda b: None, on_cancel=lambda: None,
+                          image=ov_img)
+
+    def drag():
+        import types
+        ov._on_press(types.SimpleNamespace(x=80, y=90))
+        ov._on_move(types.SimpleNamespace(x=520, y=300))
+
+    for _ in range(4):
+        root.update()
+    drag()
+    for _ in range(4):
+        root.update()
+    cap = capture.capture_screen()
+    x, y = ov.top.winfo_rootx(), ov.top.winfo_rooty()
+    w, h = ov.top.winfo_width(), ov.top.winfo_height()
+    crop = cap.crop(x - cap.origin[0], y - cap.origin[1], w, h)
+    out = os.path.join(SHOTS, "07_overlay_dark.png")
+    with open(out, "wb") as f:
+        f.write(crop.to_png())
+    print("saved", out, "%dx%d" % (w, h))
+    ov.close()
+
+    # 8) Toast（深色 HUD）
     toast = Toast(root, 3000)
     toast.show("星剪已启动 · 截图已保存到剪贴板")
     root.update()
@@ -135,7 +169,7 @@ def main():
     x, y = tw.winfo_rootx(), tw.winfo_rooty()
     w, h = tw.winfo_width(), tw.winfo_height()
     crop = cap.crop(x - cap.origin[0], y - cap.origin[1], w, h)
-    out = os.path.join(SHOTS, "07_toast_dark.png")
+    out = os.path.join(SHOTS, "08_toast_dark.png")
     with open(out, "wb") as f:
         f.write(crop.to_png())
     print("saved", out, "%dx%d" % (w, h))

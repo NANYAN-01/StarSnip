@@ -44,31 +44,27 @@ class Toast:
         dark = theme._mode_key() == "dark"
         hud = "#2C2C30" if dark else "#1C1C1E"
         fg = "#F2F2F7" if dark else "#FFFFFF"
-        pad_x, pad_y = 16, 11
 
         canvas = tk.Canvas(win, bg=_SENTINEL, highlightthickness=0)
         canvas.pack()
-        lbl = canvas.create_text(pad_x + 16, pad_y + 11, text=text, anchor="w",
-                                 fill=fg, font=("Segoe UI", 11), width=520)
-        bbox = canvas.bbox(lbl)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        r = 13
-        _round_rect(canvas, 0, 0, w + pad_x * 2 + 14, h + pad_y * 2,
-                    r, fill=hud, outline="")
-        # 品牌强调点
-        cy = (h + pad_y * 2) / 2
-        dot = theme.resolve(theme.ACCENT)
-        canvas.create_oval(13, cy - 5, 23, cy + 5, fill=dot, outline="")
-        canvas.move(lbl, pad_x + 28, pad_y)
-        canvas.configure(width=w + pad_x * 2 + 14, height=h + pad_y * 2)
+        label = canvas.create_text(0, 0, text=text, anchor="w", fill=fg,
+                                   font=("Segoe UI", 11), width=520)
+        bbox = canvas.bbox(label)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        dot_area, pad_x, pad_y = 22, 14, 10   # 左侧强调点宽度 + 内边距
+        w, h = tw + pad_x * 2 + dot_area, th + pad_y * 2
+        _round_rect(canvas, 0, 0, w, h, 13, fill=hud, outline="")
+        cy = h / 2.0
+        canvas.coords(label, pad_x + dot_area, cy)   # 绝对定位，不用相对 move
+        canvas.create_oval(12, cy - 5, 22, cy + 5,
+                           fill=theme.resolve(theme.ACCENT), outline="")
+        canvas.tag_raise(label)
+        canvas.configure(width=w, height=h)
 
         win.update_idletasks()
         sw = win.winfo_screenwidth()
         sh = win.winfo_screenheight()
-        win.geometry("%dx%d%+d%+d" % (w + pad_x * 2 + 14, h + pad_y * 2,
-                                      sw - (w + pad_x * 2 + 14) - 26,
-                                      sh - (h + pad_y * 2) - 84))
+        win.geometry("%dx%d%+d%+d" % (w, h, sw - w - 26, sh - h - 84))
         self._win = win
         self._after = self.root.after(ms or self.ms, self._destroy)
 

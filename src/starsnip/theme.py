@@ -48,16 +48,51 @@ RADIUS_PILL = 999
 PAD = 16
 CONTROL_H = 36
 
+# 分段按钮统一配色（否则 CTk 默认主题的蓝色会和品牌紫冲突）
+SEG_STYLE = {
+    "selected_color": ACCENT,
+    "selected_hover_color": ACCENT_HOVER,
+    "unselected_color": SURFACE_SOFT,
+    "unselected_hover_color": SEPARATOR,
+    "text_color": FG,
+}
+
 
 def apply_theme(theme: str = "system") -> str:
-    """设置全局外观模式，返回实际生效模式（dark/light）。"""
+    """设置全局外观模式，返回实际生效模式（dark/light）。
+
+    切换后会通知已注册的监听者（tk 原生控件无法自动跟随，
+    例如 ttk.Treeview 的配色要自己重刷）。
+    """
     mode = _MODE_MAP.get(theme, "system")
     ctk.set_appearance_mode(mode)
+    for fn in list(_listeners):
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 - 监听者自己出错不影响切换
+            pass
     try:
-        import darkdetect
+        import darkdetect  # noqa: F401
         return ctk.get_appearance_mode().lower()
     except Exception:  # noqa: BLE001
         return "dark" if mode == "dark" else "light"
+
+
+_listeners = []
+
+
+def on_theme_change(fn) -> None:
+    """注册「主题切换后要重刷的控件」。窗口销毁后回调需自行判存在。"""
+    if fn not in _listeners:
+        _listeners.append(fn)
+
+
+def off_theme_change(fn) -> None:
+    try:
+        _listeners.remove(fn)
+    except ValueError:
+        pass
+
 
 
 def _mode_key() -> str:
@@ -123,3 +158,17 @@ def photo(path: str, size):
         return None, 0, 0
     img.thumbnail((size[0], size[1]), Image.LANCZOS)
     return ImageTk.PhotoImage(img), img.width, img.height
+
+
+def thumb_image(path: str, size):
+    """缩略图专用的 CTkImage（CTkLabel 只认 CTkImage，用 ImageTk 会告警且高分屏模糊）。
+
+    返回 (CTkImage, w, h)；文件缺失/损坏返回 (None, 0, 0)。
+    """
+    try:
+        img = Image.open(path).convert("RGB")
+    except Exception:  # noqa: BLE001
+        return None, 0, 0
+    img.thumbnail((size[0], size[1]), Image.LANCZOS)
+    return (ctk.CTkImage(light_image=img, dark_image=img, size=img.size),
+            img.width, img.height)

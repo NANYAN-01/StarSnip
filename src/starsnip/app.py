@@ -9,12 +9,13 @@
 import os
 import queue
 import threading
+import traceback
 
 import customtkinter as ctk
 from tkinter import messagebox
 
 from . import (ai_writer, beautify, capture, clipboard_image, config, imgconv,
-               ocr_core, screenfiles, theme)
+               mdblocks, ocr_core, screenfiles, tablefmt, theme)
 from .history import History
 from .history_ui import HistoryWindow
 from .hotkey import HotkeyManager
@@ -26,6 +27,8 @@ from .settings_ui import SettingsWindow
 from .toast import Toast
 from .tray import SystemTray
 from .ui import ResultWindow, VerifyWindow
+from .writers.docx import build_docx
+from .writers.xlsx import build_xlsx
 
 APP_LABEL = "星剪 StarSnip"
 
@@ -69,12 +72,37 @@ class App:
         if ico:
             try:
                 self.root.iconbitmap(default=ico)
+                return
             except Exception:  # noqa: BLE001
-                try:
-                    self.root.call("wm", "iconphoto", self.root._w,
-                                   *[self.root._w])
-                except Exception:  # noqa: BLE001
-                    pass
+                pass
+        png = theme.icon_png("starsnip.png")
+        if os.path.isfile(png):
+            try:
+                from PIL import Image, ImageTk
+                # 必须持有引用，否则被 GC 后窗口图标会丢
+                self._icon_photo = ImageTk.PhotoImage(
+                    Image.open(png).convert("RGBA"))
+                self.root.iconphoto(True, self._icon_photo)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_tk_error(self, exc_type, exc_value, tb) -> None:
+        """Tk 回调异常统一兜底：写日志 + 轻提示，避免界面静默失效。
+
+        由 __init__ 注册到 root.report_callback_exception；不注册的话
+        tkinter 只把异常打到 stderr，而打包后的窗口模式没有 stderr。
+        """
+        try:
+            self.log.info("TK-ERROR %s: %s"
+                          % (getattr(exc_type, "__name__", exc_type), exc_value))
+            self.log.info("".join(
+                traceback.format_exception(exc_type, exc_value, tb)))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.toast.show("出错了：%s" % exc_value)
+        except Exception:  # noqa: BLE001
+            pass
 
     def start(self) -> None:
         capture.enable_dpi_awareness()
@@ -83,7 +111,9 @@ class App:
         self._ensure_poll()
         if self.cfg.get("tray_toast", True):
             self.root.after(900, lambda: self.toast.show(
-                "星剪已启动 · 热键 %s 截图识别" % self.cfg.get("hotkey"),
+                "%s · %s 截图识别 · %s 仅截图" % (
+                    APP_LABEL, self.cfg.get("hotkey"),
+                    self.cfg.get("hotkey_capture_only", "")),
                 int(self.cfg.get("toast_ms", 2000))))
 
     def _ensure_poll(self) -> None:
@@ -92,6 +122,9 @@ class App:
             self.root.after(60, self._poll)
 
     def _start_hotkey(self) -> None:
+        """注册两个全局热键：识别（hotkey）与仅截图（hotkey_capture_only）。"""
+        self.hotkey = None
+        self.hotkey_only = None
         try:
             self.hotkey = HotkeyManager(
                 self.cfg["hotkey"], lambda: self.events.put({"type": "hotkey"}))
@@ -105,19 +138,36 @@ class App:
                 "热键注册失败",
                 "无法注册 %s（可能被其他程序占用）。\n"
                 "可在设置中修改快捷键后重启。" % self.cfg["hotkey"])
+        # 第二个热键（仅截图）失败不打扰用户，只记日志
+        only_spec = self.cfg.get("hotkey_capture_only") or ""
+        if only_spec:
+            try:
+                self.hotkey_only = HotkeyManager(
+                    only_spec,
+                    lambda: self.events.put({"type": "capture_only"}))
+                if self.hotkey_only.start():
+                    self.log.info("capture-only hotkey: %s" % only_spec)
+                else:
+                    self.log.info("capture-only hotkey failed: %s (%s)"
+                                  % (only_spec, self.hotkey_only.error))
+            except Exception as exc:  # noqa: BLE001
+                self.log.info("capture-only hotkey parse error: %s" % exc)
 
     def _start_tray(self) -> None:
         self.tray = SystemTray(
             on_capture=lambda: self.events.put({"type": "hotkey"}),
             on_history=lambda: self.events.put({"type": "history"}),
-            on_config=self._open_config,
+            on_config=lambda: self.events.put({"type": "config"}),
             on_exit=lambda: self.events.put({"type": "exit"}),
-            tooltip="%s · %s 截图识别" % (APP_LABEL, self.cfg["hotkey"]),
+            tooltip="%s · %s 识别 · %s 仅截图" % (
+                APP_LABEL, self.cfg["hotkey"],
+                self.cfg.get("hotkey_capture_only", "")),
             log=self.log.info,
             on_hotkey=lambda: self.events.put({"type": "hotkey_settings"}),
-            on_log=self._open_log,
+            on_log=lambda: self.events.put({"type": "log"}),
             on_settings=lambda: self.events.put({"type": "settings"}),
-            icon_path=theme.icon_ico("starsnip.ico"))
+            icon_path=theme.icon_ico("starsnip.ico"),
+            on_capture_only=lambda: self.events.put({"type": "capture_only"}))
         if not self.tray.start():
             self.log.info("tray start failed: %s" % self.tray.error)
             messagebox.showwarning("托盘初始化失败",
@@ -131,8 +181,9 @@ class App:
                 "托盘图标已在通知区域；若看不到请点时钟旁的 ^ 展开"))
 
     def shutdown(self) -> None:
-        if self.hotkey:
-            self.hotkey.stop()
+        for hk in (self.hotkey, getattr(self, "hotkey_only", None)):
+            if hk:
+                hk.stop()
         if self.tray:
             self.tray.stop()
         if self.history:
@@ -157,10 +208,16 @@ class App:
         kind = event.get("type")
         if kind == "hotkey":
             self._trigger_capture()
+        elif kind == "capture_only":
+            self._trigger_capture(ocr=False)
         elif kind == "history":
             self.open_history()
         elif kind == "settings":
             self.open_settings()
+        elif kind == "config":
+            self._open_config()
+        elif kind == "log":
+            self._open_log()
         elif kind == "hotkey_settings":
             self.open_hotkey_settings()
         elif kind == "exit":
@@ -196,7 +253,14 @@ class App:
             self._apply_translate(event["text"], event["target"])
         elif kind == "error":
             self.busy = False
-            messagebox.showerror("识别失败", event.get("message", "未知错误"))
+            msg = event.get("message", "未知错误")
+            self.log.info("ERROR %s" % msg.replace("\n", " | "))
+            # 截图已经保存/进剪贴板；识别失败不再弹模态框打断操作
+            short = msg.splitlines()[0][:60] if msg else "未知错误"
+            self.toast.show("识别失败：%s（图片已保留）" % short,
+                            int(self.cfg.get("toast_ms", 2000)) + 1500)
+            if self.window is not None and self.window.winfo_exists():
+                self.window.status_note("识别失败：%s" % short)
 
     # ---------- 快捷键 / 配置 / 设置 ----------
     def open_hotkey_settings(self) -> None:
@@ -206,11 +270,14 @@ class App:
         self.hotkey_dialog = HotkeyDialog(self.root, self.cfg["hotkey"],
                                           self._apply_hotkey)
 
-    def _apply_hotkey(self, spec: str) -> None:
-        old = self.cfg.get("hotkey")
+    def _apply_hotkey(self, spec: str, which: str = "ocr") -> None:
+        """which="ocr" 改识别热键；which="capture" 改仅截图热键。"""
+        key = "hotkey" if which == "ocr" else "hotkey_capture_only"
+        old = self.cfg.get(key)
+        event = "hotkey" if which == "ocr" else "capture_only"
         try:
             new_manager = HotkeyManager(
-                spec, lambda: self.events.put({"type": "hotkey"}))
+                spec, lambda: self.events.put({"type": event}))
             ok = new_manager.start()
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("快捷键无效", str(exc))
@@ -221,14 +288,21 @@ class App:
                 "%s 可能被其他程序占用，请换一个组合。\n%s"
                 % (spec, new_manager.error or ""))
             return
-        if self.hotkey:
-            self.hotkey.stop()
-        self.hotkey = new_manager
-        self.cfg["hotkey"] = spec
-        config.save_setting("hotkey", spec)
+        if which == "ocr":
+            if self.hotkey:
+                self.hotkey.stop()
+            self.hotkey = new_manager
+        else:
+            if getattr(self, "hotkey_only", None):
+                self.hotkey_only.stop()
+            self.hotkey_only = new_manager
+        self.cfg[key] = spec
+        config.save_setting(key, spec)
         if self.tray:
-            self.tray.update_tooltip("%s · %s 截图识别" % (APP_LABEL, spec))
-        self.log.info("hotkey changed: %s -> %s" % (old, spec))
+            self.tray.update_tooltip("%s · %s 识别 · %s 仅截图" % (
+                APP_LABEL, self.cfg.get("hotkey"),
+                self.cfg.get("hotkey_capture_only", "")))
+        self.log.info("hotkey changed: %s -> %s (%s)" % (old, spec, which))
         self.toast.show("快捷键已更新：%s" % spec.upper())
 
     def _open_config(self) -> None:
@@ -250,11 +324,28 @@ class App:
             self.settings_window.lift()
             return
         self.settings_window = SettingsWindow(
-            self.root, self.cfg, self._apply_settings, self._hotkey_from_settings)
+            self.root, self.cfg, self._apply_settings,
+            self._hotkey_from_settings, on_theme=self._apply_theme_live,
+            on_hotkey_only=self._hotkey_only_from_settings)
+
+    def _apply_theme_live(self, value: str) -> None:
+        """设置窗口里点主题分段按钮时立即落盘（不需要再点保存）。"""
+        self.cfg["theme"] = value
+        try:
+            config.save_setting("theme", value)
+        except OSError as exc:
+            self.log.info("save theme failed: %s" % exc)
 
     def _hotkey_from_settings(self, var):
         def apply_(spec):
-            self._apply_hotkey(spec)
+            self._apply_hotkey(spec, "ocr")
+            var.set(spec)
+        dlg = HotkeyDialog(self.root, var.get(), apply_)
+        return dlg
+
+    def _hotkey_only_from_settings(self, var):
+        def apply_(spec):
+            self._apply_hotkey(spec, "capture")
             var.set(spec)
         dlg = HotkeyDialog(self.root, var.get(), apply_)
         return dlg
@@ -272,9 +363,13 @@ class App:
         self.toast.show("设置已保存")
 
     # ---------- 截图与 OCR ----------
-    def _trigger_capture(self) -> None:
+    def _trigger_capture(self, ocr: bool = None) -> None:
+        """开始截图取景。ocr=None 表示按配置 auto_ocr 决定是否识别。"""
         if self.busy:
             return
+        if ocr is None:
+            ocr = bool(self.cfg.get("auto_ocr", True))
+        self._ocr_after_capture = ocr
         self.busy = True
         try:
             self.image = capture.capture_screen()
@@ -285,9 +380,18 @@ class App:
         bbox = (self.image.origin[0], self.image.origin[1],
                 self.image.width, self.image.height)
         self._bbox = bbox
-        SelectionOverlay(self.root, bbox,
-                         on_select=self._on_selection,
-                         on_cancel=self._on_cancel)
+        try:
+            SelectionOverlay(self.root, bbox,
+                             on_select=self._on_selection,
+                             on_cancel=self._on_cancel,
+                             image=self.image,
+                             confirm=not ocr)   # 仅截图：停留等 ✓/✕ 确认
+        except Exception as exc:  # noqa: BLE001 - 取景框起不来也要能再按热键
+            self.busy = False
+            self.log.info("overlay failed: %s: %s" % (type(exc).__name__, exc))
+            messagebox.showerror(
+                "取景框启动失败",
+                "%s: %s\n\n详见日志：%s" % (type(exc).__name__, exc, self.log.path))
 
     def _on_cancel(self) -> None:
         self.busy = False
@@ -308,6 +412,11 @@ class App:
         self.last_source = "hotkey"
         self.log.info("capture: bbox=%s size=%s"
                       % (bbox, self.png and len(self.png)))
+        if not getattr(self, "_ocr_after_capture", True):
+            self.busy = False
+            self.toast.show("已截图（未识别）")
+            self.log.info("capture only: skip OCR")
+            return
         self._run_ocr()
 
     def _save_side_effects(self) -> None:
@@ -553,6 +662,44 @@ class App:
             self.last_export = path
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("保存失败", str(exc))
+
+    # ---------- 导出 ----------
+    def _export_file(self, window, fmt: str) -> None:
+        """把结果窗口的内容导出为 docx / xlsx / md / txt。
+
+        由 ResultWindow.on_export(window, fmt) 调用；表格视图已解析出的行
+        优先用于 XLSX，其余格式以当前文本（含译文）为准。
+        """
+        text = (window._content() if window is not None else "") or ""
+        if not text.strip():
+            messagebox.showinfo("导出", "没有可导出的内容")
+            return
+        rows = getattr(window, "_rows", None) or tablefmt.parse_table(text)
+        try:
+            if fmt == "docx":
+                blocks = mdblocks.parse_blocks(text)
+                if rows and not any(b["type"] == "table" for b in blocks):
+                    blocks.append({"type": "table", "rows": rows})
+                data = build_docx(blocks)
+            elif fmt == "xlsx":
+                if not rows:
+                    messagebox.showinfo("导出 XLSX",
+                                        "当前内容解析不出表格，请先切到「表格」视图")
+                    return
+                data = build_xlsx([rows])
+            elif fmt in ("md", "txt"):
+                data = text.encode("utf-8")
+            else:
+                raise ValueError("不支持的导出格式：%s" % fmt)
+            path = screenfiles.save_bytes(
+                data, self.cfg.get("export_dir") or None, fmt,
+                prefix="StarSnip")
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("导出失败", str(exc))
+            return
+        self.last_export = path
+        self.log.info("export %s -> %s (%d bytes)" % (fmt, path, len(data)))
+        self.toast.show("已导出：%s" % os.path.basename(path))
 
     # ---------- 历史窗口 ----------
     def open_history(self) -> None:

@@ -4,9 +4,12 @@
 快捷键调用现有录入对话框。
 """
 
+import queue
+import threading
+
 import customtkinter as ctk
 
-from . import theme
+from . import ocr_core, theme
 
 
 class _Field(ctk.CTkFrame):
@@ -22,22 +25,28 @@ class _Field(ctk.CTkFrame):
 
 
 class SettingsWindow(ctk.CTkToplevel):
-    def __init__(self, master, cfg, on_save, on_hotkey):
+    def __init__(self, master, cfg, on_save, on_hotkey, on_theme=None,
+                 on_hotkey_only=None):
         super().__init__(master)
         self.cfg = cfg
         self.on_save = on_save
         self.on_hotkey = on_hotkey
+        self.on_theme = on_theme
+        self.on_hotkey_only = on_hotkey_only
         self.title("星剪 · 设置")
         self.geometry("540x740")
         self.minsize(460, 520)
 
         self._hotkey_var = ctk.StringVar(value=cfg.get("hotkey", ""))
+        self._hotkey_only_var = ctk.StringVar(
+            value=cfg.get("hotkey_capture_only", ""))
         self._build()
+        # 打开即拉一次模型列表（失败就保持手填，不阻塞窗口）
+        self.after(120, self.refresh_models)
 
     def _build(self):
         outer = ctk.CTkFrame(self, fg_color="transparent")
         outer.pack(fill="both", expand=True)
-
         head = ctk.CTkFrame(outer, fg_color="transparent")
         head.pack(fill="x", padx=theme.PAD, pady=(theme.PAD, 6))
         logo = theme.logo_image(22)
@@ -45,43 +54,73 @@ class SettingsWindow(ctk.CTkToplevel):
             ctk.CTkLabel(head, text="", image=logo).pack(side="left", padx=(2, 8))
         ctk.CTkLabel(head, text="设置", font=theme.font(16, "bold"), text_color=theme.FG).pack(side="left")
 
-        scroll = ctk.CTkFrame(outer, fg_color="transparent")
+        # 内容区可滚动：字段较多，窗口高度不够时不会把底部按钮挤掉
+        scroll = ctk.CTkScrollableFrame(outer, fg_color="transparent",
+                                        scrollbar_button_color=theme.SEPARATOR,
+                                        scrollbar_button_hover_color=theme.FG_SECONDARY)
         scroll.pack(fill="both", expand=True, padx=theme.PAD)
 
-        # 主题
-        f = _Field(scroll, "界面主题", "system = 跟随系统自动深浅色")
+        def field(label, hint=""):
+            """建一个字段块并 pack 进滚动区（之前漏了这一步，导致设置窗口全空）。"""
+            block = _Field(scroll, label, hint)
+            block.pack(fill="x")
+            return block
+
+        # 主题（点一下立即生效并保存，不需要再点「保存」）
+        f = field("界面主题", "点击即时生效；system = 跟随系统自动深浅色")
         self.theme_seg = ctk.CTkSegmentedButton(
-            f.body, values=["system", "light", "dark"], command=None)
+            f.body, values=["system", "light", "dark"],
+            command=self._pick_theme, **theme.SEG_STYLE)
         self.theme_seg.set(self.cfg.get("theme", "system"))
         self.theme_seg.pack(side="left")
 
-        # 快捷键
-        f = _Field(scroll, "截图快捷键", "点击右侧按钮，按下新的组合键即可")
+        # 快捷键（识别 / 仅截图）
+        f = field("截图识别快捷键", "拖拽后立即 OCR，默认 Ctrl+2")
         ctk.CTkLabel(f.body, textvariable=self._hotkey_var, font=theme.font(13, mono=True),
                      text_color=theme.ACCENT).pack(side="left")
         ctk.CTkButton(f.body, text="更改…", width=90, height=30,
                       corner_radius=theme.RADIUS_SM, fg_color=theme.ACCENT,
                       command=self._open_hotkey).pack(side="right")
 
+        f = field("仅截图快捷键", "拖拽后停留，点 ✓ 才保存/进剪贴板，默认 Ctrl+1")
+        ctk.CTkLabel(f.body, textvariable=self._hotkey_only_var,
+                     font=theme.font(13, mono=True),
+                     text_color=theme.ACCENT).pack(side="left")
+        ctk.CTkButton(f.body, text="更改…", width=90, height=30,
+                      corner_radius=theme.RADIUS_SM,
+                      fg_color=theme.SURFACE_SOFT, text_color=theme.FG,
+                      border_width=1, border_color=theme.SEPARATOR,
+                      command=self._open_hotkey_only).pack(side="right")
+
         # 模型与后端
-        f = _Field(scroll, "OCR 识别模型")
-        self.model_e = self._entry(f.body, self.cfg.get("default_model", ""))
+        f = field("OCR 识别模型", "点右侧「刷新」可从后端重新拉取模型列表")
+        self.model_e = self._combo(f.body, self.cfg.get("default_model", ""))
+        ctk.CTkButton(f.body, text="刷新列表", width=88, height=30,
+                      corner_radius=theme.RADIUS_SM,
+                      fg_color=theme.SURFACE_SOFT, text_color=theme.FG,
+                      border_width=1, border_color=theme.SEPARATOR,
+                      command=self.refresh_models).pack(side="right", padx=(8, 0))
 
-        f = _Field(scroll, "排版 / 翻译模型", "用于 AI 排版导出与一键翻译")
-        self.layout_e = self._entry(f.body, self.cfg.get("layout_model", ""))
+        f = field("排版 / 翻译模型", "用于 AI 排版导出与一键翻译")
+        self.layout_e = self._combo(f.body, self.cfg.get("layout_model", ""))
 
-        f = _Field(scroll, "后端 Ollama 地址")
+        f = field("后端 Ollama 地址", "内网地址建议写在 config.local.json，避免提交进仓库")
         self.url_e = self._entry(f.body, self.cfg.get("ollama_url", ""))
 
         # 目录
-        f = _Field(scroll, "截图保存目录", "留空 = 图片\\StarSnip")
+        f = field("截图保存目录", "留空 = 图片\\StarSnip")
         self.imgdir_e = self._entry(f.body, self.cfg.get("image_dir", ""))
 
-        f = _Field(scroll, "导出目录", "留空 = 文档\\StarSnip")
+        f = field("导出目录", "留空 = 文档\\StarSnip")
         self.exportdir_e = self._entry(f.body, self.cfg.get("export_dir", ""))
 
         # 开关
-        f = _Field(scroll, "识别选项")
+        f = field("识别选项")
+        self.auto_cb = ctk.CTkCheckBox(
+            f.body, text="截图后自动识别（关闭 = 只截图/存剪贴板）",
+            font=theme.font(13))
+        self.auto_cb.select() if self.cfg.get("auto_ocr", True) else self.auto_cb.deselect()
+        self.auto_cb.pack(anchor="w", pady=(2, 4))
         self.joint_cb = ctk.CTkCheckBox(f.body, text="启用联合识别（多模型）",
                                         font=theme.font(13))
         self.joint_cb.select() if self.cfg.get("joint_enabled") else self.joint_cb.deselect()
@@ -95,8 +134,9 @@ class SettingsWindow(ctk.CTkToplevel):
         self.hist_cb.pack(anchor="w", pady=(2, 4))
 
         # 美化背景
-        f = _Field(scroll, "美化分享图背景")
-        self.bg_seg = ctk.CTkSegmentedButton(f.body, values=["white", "gradient"])
+        f = field("美化分享图背景")
+        self.bg_seg = ctk.CTkSegmentedButton(f.body, values=["white", "gradient"],
+                                             **theme.SEG_STYLE)
         self.bg_seg.set(self.cfg.get("beautify_bg", "white"))
         self.bg_seg.pack(side="left")
 
@@ -121,8 +161,63 @@ class SettingsWindow(ctk.CTkToplevel):
         e.pack(fill="x")
         return e
 
+    @staticmethod
+    def _combo(parent, value):
+        """可编辑下拉框：既能直接输入，也能从后端模型列表里选。"""
+        c = ctk.CTkComboBox(parent, height=34, corner_radius=theme.RADIUS_SM,
+                            font=theme.font(13), border_width=1,
+                            border_color=theme.SEPARATOR,
+                            values=[value] if value else [],
+                            dropdown_font=theme.font(13), state="normal")
+        c.set(value or "")
+        c.pack(fill="x", padx=(0, 96))   # 给右侧「刷新列表」按钮留位置
+        return c
+
+    # ---------- 模型列表 ----------
+    def refresh_models(self, notify=None):
+        """后台线程拉 /api/tags，主线程轮询取结果填充下拉框。
+
+        注意：绝不能在子线程里调 self.after()/configure()——Tk 是单线程的，
+        跨线程调用会抛 "main thread is not in main loop"，表现为「下拉没有模型」。
+        """
+        url = self.url_e.get().strip() or self.cfg.get("ollama_url", "")
+        self._models_queue = queue.Queue()
+
+        def work():
+            self._models_queue.put(ocr_core.list_models(url))
+
+        threading.Thread(target=work, daemon=True).start()
+        self._poll_models(0, notify)
+
+    def _poll_models(self, tries, notify):
+        try:
+            names = self._models_queue.get_nowait()
+        except queue.Empty:
+            if tries < 60:                      # 最多等约 6 秒
+                self.after(100, lambda: self._poll_models(tries + 1, notify))
+            return
+        if not self.winfo_exists():
+            return
+        for combo in (self.model_e, self.layout_e):
+            current = combo.get()
+            combo.configure(values=names or [current])
+            combo.set(current)
+        if notify:
+            notify(names)
+
+    def _pick_theme(self, value):
+        """主题分段按钮：立即应用 + 落盘（无需再点保存）。"""
+        theme.apply_theme(value)
+        self.cfg["theme"] = value
+        if self.on_theme:
+            self.on_theme(value)
+
     def _open_hotkey(self):
         self.on_hotkey(self._hotkey_var)
+
+    def _open_hotkey_only(self):
+        if self.on_hotkey_only:
+            self.on_hotkey_only(self._hotkey_only_var)
 
     def _save(self):
         values = {
@@ -132,6 +227,7 @@ class SettingsWindow(ctk.CTkToplevel):
             "ollama_url": self.url_e.get().strip(),
             "image_dir": self.imgdir_e.get().strip(),
             "export_dir": self.exportdir_e.get().strip(),
+            "auto_ocr": bool(self.auto_cb.get()),
             "joint_enabled": bool(self.joint_cb.get()),
             "clipboard_image": bool(self.clip_cb.get()),
             "history_enabled": bool(self.hist_cb.get()),

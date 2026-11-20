@@ -95,7 +95,10 @@ class PinWindow:
         menu.add_command(label="原始大小", command=self._reset)
         menu.add_separator()
         menu.add_command(label="关闭（Esc）", command=self.close)
-        menu.tk_popup(event.x_root, event.y_root)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()   # 不释放会把整屏鼠标 grab 住
 
     # ---------- 动作 ----------
     def _copy(self):

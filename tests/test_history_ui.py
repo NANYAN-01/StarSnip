@@ -36,11 +36,13 @@ def main():
     assert "34615.50" in win.clipboard_get()
     print("copy to clipboard OK")
 
-    win.search_var.set("不存在")
+    win.search_entry.delete(0, "end")
+    win.search_entry.insert(0, "不存在")
     win.reload()
     root.update()
     assert len(win.tree.get_children()) == 0
-    win.search_var.set("34615")
+    win.search_entry.delete(0, "end")
+    win.search_entry.insert(0, "34615")
     win.reload()
     root.update()
     assert len(win.tree.get_children()) == 1

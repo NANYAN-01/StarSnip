@@ -166,11 +166,13 @@ class SystemTray:
     MENU_HOTKEY = 5
     MENU_LOG = 6
     MENU_SETTINGS = 7
+    MENU_CAPTURE_ONLY = 8
 
     def __init__(self, on_capture, on_history, on_config, on_exit,
                  tooltip="星剪 StarSnip", log=None, on_hotkey=None, on_log=None,
-                 on_settings=None, icon_path=None):
+                 on_settings=None, icon_path=None, on_capture_only=None):
         self.on_capture = on_capture
+        self.on_capture_only = on_capture_only
         self.on_history = on_history
         self.on_config = on_config
         self.on_exit = on_exit
@@ -340,6 +342,7 @@ class SystemTray:
             cmd = wparam & 0xFFFF
             mapping = {
                 self.MENU_CAPTURE: self.on_capture,
+                self.MENU_CAPTURE_ONLY: self.on_capture_only,
                 self.MENU_HISTORY: self.on_history,
                 self.MENU_CONFIG: self.on_config,
                 self.MENU_EXIT: self.on_exit,
@@ -363,6 +366,8 @@ class SystemTray:
         menu = user32.CreatePopupMenu()
         try:
             user32.AppendMenuW(menu, MF_STRING, self.MENU_CAPTURE, "截图识别")
+            user32.AppendMenuW(menu, MF_STRING, self.MENU_CAPTURE_ONLY,
+                               "仅截图（不识别）")
             user32.AppendMenuW(menu, MF_STRING, self.MENU_HISTORY, "历史记录")
             user32.AppendMenuW(menu, MF_STRING, self.MENU_SETTINGS, "设置…")
             user32.AppendMenuW(menu, MF_STRING, self.MENU_HOTKEY, "设置快捷键…")

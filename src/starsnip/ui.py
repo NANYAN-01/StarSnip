@@ -54,6 +54,15 @@ class ResultWindow(ctk.CTkToplevel):
         self._build()
         self.bind("<Escape>", lambda e: self._close())
         self.bind("<Control-c>", lambda e: self.copy_selection() or "break")
+        # ttk.Treeview 不会跟随 CTk 的外观模式，主题切换后要手动重刷
+        theme.on_theme_change(self._restyle)
+
+    def _restyle(self):
+        try:
+            if self.winfo_exists():
+                _style_tree()
+        except Exception:  # noqa: BLE001 - 窗口已销毁
+            pass
 
     # ---------- build ----------
     def _build(self):
@@ -78,7 +87,8 @@ class ResultWindow(ctk.CTkToplevel):
         self.seg = ctk.CTkSegmentedButton(ctrl, values=["文本", "表格"],
                                           font=self._F.body, height=32,
                                           corner_radius=theme.RADIUS_SM,
-                                          command=self._switch_view)
+                                          command=self._switch_view,
+                                          **theme.SEG_STYLE)
         self.seg.set("文本")
         self.seg.pack(side="left")
         self._btn(ctrl, "校验双模型", self._verify, padx=(0, 6))
@@ -120,11 +130,11 @@ class ResultWindow(ctk.CTkToplevel):
         self.export_menu = ctk.CTkOptionMenu(
             bar, values=["导出 Word .docx", "导出 TXT", "导出 XLSX",
                          "导出 Markdown .md", "导出 美化分享图 PNG"],
-            command=self._on_export_pick, font=self._F.body, width=150,
+            command=self._on_export_pick, font=self._F.body, width=170,
             corner_radius=theme.RADIUS_SM, fg_color=theme.SURFACE_SOFT,
-            button_color=theme.SEPARATOR, button_hover_color=theme.SEPARATOR,
+            button_color=theme.SURFACE_SOFT, button_hover_color=theme.SEPARATOR,
             text_color=theme.FG, dynamic_resizing=False)
-        self.export_menu.set("导出 ▾")
+        self.export_menu.set("导出")
         self.export_menu.pack(side="left", padx=(16, 0))
 
     def _btn(self, parent, text, cmd, side="left", variant="secondary", padx=0):
@@ -197,13 +207,26 @@ class ResultWindow(ctk.CTkToplevel):
         self.text.pack_forget()
         self.table_frame.pack(fill="both", expand=True, padx=2, pady=2)
 
+    def _col_width(self, text):
+        """按真实字体度量估算列宽（tk 字体随 DPI 缩放，不能按固定像素估）。"""
+        if getattr(self, "_measure_font", None) is None:
+            import tkinter.font as tkfont
+            self._measure_font = tkfont.Font(family="Segoe UI", size=11)
+        text = (text or "").strip()
+        return self._measure_font.measure(text) + 30
+
     def _fill_tree(self, rows):
         cols = ["c%d" % i for i in range(len(rows[0]))]
         self.tree.delete(*self.tree.get_children())
         self.tree.configure(columns=cols)
         for i, col in enumerate(cols):
             self.tree.heading(col, text=rows[0][i] or ("列%d" % (i + 1)))
-            self.tree.column(col, width=120, anchor="w", minwidth=60)
+            widest = max([self._col_width(rows[0][i])] +
+                         [self._col_width(r[i] if i < len(r) else "")
+                          for r in rows[1:]])
+            # 基础宽度按内容算；多出来的空间由各列按比例分摊（只让最后一列拉伸会失衡）
+            self.tree.column(col, width=max(70, min(280, widest)),
+                             anchor="w", minwidth=55, stretch=True)
         for row in rows[1:]:
             self.tree.insert("", "end", values=row)
 
@@ -245,7 +268,7 @@ class ResultWindow(ctk.CTkToplevel):
         fmt = {"导出 Word .docx": "docx", "导出 TXT": "txt",
                "导出 XLSX": "xlsx", "导出 Markdown .md": "md",
                "导出 美化分享图 PNG": "png"}.get(value)
-        self.export_menu.set("导出 ▾")
+        self.export_menu.set("导出")
         if not fmt:
             return
         if fmt == "png":
@@ -316,7 +339,13 @@ class VerifyWindow(ctk.CTkToplevel):
             for idx, line in enumerate(result["text"].splitlines()):
                 tag = ("diff",) if highlight and idx in highlight else ()
                 tb.insert("end", line + "\n", tag)
-            tb.tag_configure("diff", background="#FDE68A")
+            # 差异行必须黄底深字：深色模式下白字 + 浅黄底几乎不可读
+            if theme._mode_key() == "dark":
+                tb.tag_configure("diff", background="#6E5407",
+                                 foreground="#FFE9A8")
+            else:
+                tb.tag_configure("diff", background="#FDE68A",
+                                 foreground="#1C1C1E")
         tb.configure(state="disabled")
 
     def _copy(self, result):

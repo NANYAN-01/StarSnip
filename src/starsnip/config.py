@@ -9,12 +9,14 @@ DEFAULTS = {
     "joint_enabled": False,
     "joint_models": ["glm-ocr:latest", "richardyoung/unlimited-ocr:latest"],
     "verify_models": ["glm-ocr:latest", "richardyoung/unlimited-ocr:latest"],
-    "hotkey": "ctrl+alt+o",
+    "hotkey": "ctrl+2",
+    "hotkey_capture_only": "ctrl+1",
     "max_side_px": 1280,
     "timeout_s": 60,
     "history_enabled": True,
     "history_keep": 500,
     "save_image": True,
+    "auto_ocr": True,
     "image_dir": "",
     "clipboard_image": True,
     "toast_ms": 2000,
@@ -42,30 +44,46 @@ def _default_config_path() -> str:
 
 CONFIG_PATH = _default_config_path()
 
+# 本地私密覆盖文件：与 config.json 同目录，不入库（.gitignore）。
+# 内网 Ollama 地址、个人路径之类不该公开的设置放这里，启动时它覆盖 config.json。
+LOCAL_CONFIG_NAME = "config.local.json"
+
+
+def local_config_path(path: str = None) -> str:
+    base = path or CONFIG_PATH
+    return os.path.join(os.path.dirname(base) or ".", LOCAL_CONFIG_NAME)
+
+
+def _read_json(p: str) -> dict:
+    # utf-8-sig：兼容记事本/PowerShell 写出的 BOM，否则整个本地配置会被静默忽略
+    try:
+        with open(p, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
 
 def load(path: str = CONFIG_PATH) -> dict:
     cfg = copy.deepcopy(DEFAULTS)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            merged = json.load(f)
-        cfg.update(merged)
-    except FileNotFoundError:
-        pass
+    cfg.update(_read_json(path))
+    cfg.update(_read_json(local_config_path(path)))
     cfg["ollama_url"] = os.environ.get("OLLAMA_URL", cfg["ollama_url"]).rstrip("/")
     cfg["default_model"] = os.environ.get("OLLAMA_MODEL", cfg["default_model"])
     return cfg
 
 
 def save_setting(key: str, value, path: str = None) -> str:
-    """Update one key in config.json, preserving everything else."""
-    p = path or CONFIG_PATH
-    data = {}
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        data = {}
+    """Update one key in config.json, preserving everything else.
+
+    若同目录存在 config.local.json，则写入它而不是 config.json：
+    避免「在设置里填了内网地址」把私密值写进入库的基础配置文件。
+    """
+    base = path or CONFIG_PATH
+    local = local_config_path(base)
+    target = local if os.path.isfile(local) else base
+    data = _read_json(target)
     data[key] = value
-    with open(p, "w", encoding="utf-8") as f:
+    with open(target, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    return p
+    return target
