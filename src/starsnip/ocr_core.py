@@ -1,11 +1,12 @@
 """Remote Ollama OCR core: generate/chat modes, grounding cleanup, diffing."""
 
 import base64
-import difflib
 import json
 import re
 import threading
 import urllib.request
+
+from . import tablefmt
 
 DEFAULT_PROMPT = (
     "请识别图片中的所有文字内容，按原样逐行输出，不要遗漏，不要翻译。"
@@ -20,7 +21,8 @@ TABLE_PROMPT = (
 GROUNDING_RE = re.compile(r"^\s*[A-Za-z_]+\s*\[\s*\d+(?:\s*,\s*\d+){2,3}\s*\]\s*")
 GROUNDING_TOKEN_RE = re.compile(r"<\|[^|]*\|>")
 STRUCT_TAG_RE = re.compile(
-    r"</?(?:table|figure|text|title|list|equation|header|footer|reference|formula)\b[^>]*>",
+    r"</?(?:table|thead|tbody|tfoot|tr|td|th|figure|text|title|list|equation"
+    r"|header|footer|reference|formula)\b[^>]*>",
     re.IGNORECASE,
 )
 
@@ -32,6 +34,9 @@ def pick_mode(model: str, mode: str = "auto") -> str:
 
 
 def clean_grounding(text: str) -> str:
+    # glm-ocr 对表格可能直接输出 HTML 片段：先转 Markdown，再清定位/结构标签，
+    # 否则文本视图和导出都会拿到 <tr><td> 一类的标签。
+    text = tablefmt.html_to_markdown(text or "")
     lines = []
     for line in text.splitlines():
         line = GROUNDING_TOKEN_RE.sub("", line)
@@ -131,8 +136,8 @@ def time_ms() -> float:
     return time.time() * 1000.0
 
 
-def list_models(url: str, timeout: float = 6.0) -> list:
-    """列出后端可用模型名（用于设置里的下拉选择）。失败返回 []。"""
+def list_models_detail(url: str, timeout: float = 6.0) -> list:
+    """列出后端模型及其能力：[{name, capabilities, family}]。失败返回 []。"""
     try:
         req = urllib.request.Request(url.rstrip("/") + "/api/tags",
                                      headers={"Accept": "application/json"})
@@ -140,5 +145,45 @@ def list_models(url: str, timeout: float = 6.0) -> list:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception:  # noqa: BLE001 - 后端不可用时只是没得选
         return []
-    names = [m.get("name") for m in (data.get("models") or []) if m.get("name")]
-    return sorted(names)
+    items = []
+    for item in (data.get("models") or []):
+        name = item.get("name")
+        if not name:
+            continue
+        details = item.get("details") or {}
+        items.append({"name": name,
+                      "capabilities": list(item.get("capabilities") or []),
+                      "family": details.get("family") or ""})
+    return items
+
+
+def is_ocr_model(name: str, capabilities=None) -> bool:
+    """OCR 专用模型判定：名字里带 ocr（glm-ocr / unlimited-ocr / xiaomi-ocr…）。
+
+    capabilities 来自 /api/tags；已知能力时必须有 vision（看不到图不可能 OCR）。
+    老版本后端不返回 capabilities，此时只看名字，避免把列表清空。
+    """
+    caps = [str(c).lower() for c in (capabilities or [])]
+    if caps and "vision" not in caps:
+        return False
+    return "ocr" in (name or "").lower()
+
+
+def list_ocr_models(url: str, timeout: float = 6.0) -> list:
+    """设置里 OCR 下拉的候选：优先只给 OCR 模型。
+
+    一个 OCR 模型都没装时退回「支持视觉的模型」，再退回全部模型，
+    免得下拉框空着让人以为后端挂了（提示文案会说明）。
+    """
+    items = list_models_detail(url, timeout)
+    if not items:
+        return []
+    ocr = [i["name"] for i in items
+           if is_ocr_model(i["name"], i["capabilities"])]
+    if ocr:
+        return sorted(ocr)
+    vision = [i["name"] for i in items
+              if "vision" in [str(c).lower() for c in i["capabilities"]]]
+    if vision:
+        return sorted(vision)
+    return sorted(i["name"] for i in items)

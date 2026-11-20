@@ -7,9 +7,10 @@ overflow on Windows 11).
 
 import ctypes
 import os
-import sys
 import threading
 from ctypes import wintypes
+
+from . import single_instance
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 shell32 = ctypes.WinDLL("shell32", use_last_error=True)
@@ -160,23 +161,23 @@ class SystemTray:
     """Tray icon + context menu. Callbacks fire on the tray thread."""
 
     MENU_CAPTURE = 1
-    MENU_HISTORY = 2
-    MENU_CONFIG = 3
-    MENU_EXIT = 4
-    MENU_HOTKEY = 5
+    MENU_CAPTURE_ONLY = 2
+    MENU_HISTORY = 3
+    MENU_SETTINGS = 4
+    MENU_CONFIG = 5
     MENU_LOG = 6
-    MENU_SETTINGS = 7
-    MENU_CAPTURE_ONLY = 8
+    MENU_EXIT = 7
 
     def __init__(self, on_capture, on_history, on_config, on_exit,
-                 tooltip="星剪 StarSnip", log=None, on_hotkey=None, on_log=None,
-                 on_settings=None, icon_path=None, on_capture_only=None):
+                 tooltip="星剪 StarSnip", log=None, on_log=None,
+                 on_settings=None, icon_path=None, on_capture_only=None,
+                 on_activate=None):
         self.on_capture = on_capture
         self.on_capture_only = on_capture_only
         self.on_history = on_history
         self.on_config = on_config
         self.on_exit = on_exit
-        self.on_hotkey = on_hotkey
+        self.on_activate = on_activate
         self.on_log = on_log
         self.on_settings = on_settings
         self._icon_path = icon_path
@@ -188,17 +189,6 @@ class SystemTray:
         self.error = None
         self._icon = None
         self._wndproc = WNDPROC(self._wnd_proc)  # keep reference alive
-
-    def _load_icon(self, hinst):
-        """自定义图标文件优先；失败回退系统默认图标。"""
-        if self._icon_path and os.path.isfile(self._icon_path):
-            h = user32.LoadImageW(hinst, self._icon_path, IMAGE_ICON, 0, 0,
-                                  LR_LOADFROMFILE | LR_DEFAULTSIZE)
-            if h:
-                self._log("tray: custom icon loaded %s" % self._icon_path)
-                return h
-            self._log("tray: LoadImageW failed for %s, fallback" % self._icon_path)
-        return user32.LoadIconW(None, IDI_APPLICATION)
 
     # ---------- public ----------
     def start(self) -> bool:
@@ -331,6 +321,11 @@ class SystemTray:
         return nid
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
+        # 第二个实例启动时广播 StarSnip.Activate，让常驻实例提示「已在运行」
+        if single_instance.ACTIVATE_MESSAGE and msg == single_instance.ACTIVATE_MESSAGE:
+            if self.on_activate:
+                self._safe(self.on_activate)
+            return 0
         if msg == WM_TRAY:
             event = lparam & 0xFFFF
             if event in (WM_LBUTTONUP, WM_LBUTTONDBLCLK):
@@ -346,7 +341,6 @@ class SystemTray:
                 self.MENU_HISTORY: self.on_history,
                 self.MENU_CONFIG: self.on_config,
                 self.MENU_EXIT: self.on_exit,
-                self.MENU_HOTKEY: self.on_hotkey,
                 self.MENU_LOG: self.on_log,
                 self.MENU_SETTINGS: self.on_settings,
             }
@@ -370,7 +364,6 @@ class SystemTray:
                                "仅截图（不识别）")
             user32.AppendMenuW(menu, MF_STRING, self.MENU_HISTORY, "历史记录")
             user32.AppendMenuW(menu, MF_STRING, self.MENU_SETTINGS, "设置…")
-            user32.AppendMenuW(menu, MF_STRING, self.MENU_HOTKEY, "设置快捷键…")
             user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
             user32.AppendMenuW(menu, MF_STRING, self.MENU_CONFIG, "打开配置文件")
             user32.AppendMenuW(menu, MF_STRING, self.MENU_LOG, "打开日志")

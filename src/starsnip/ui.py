@@ -157,7 +157,9 @@ class ResultWindow(ctk.CTkToplevel):
         self.text.delete("1.0", "end")
         self.text.insert("1.0", self._orig_text)
         self._rows = None
-        self._table_requested = False
+        # 表格重识别的结果如果仍然解析不出表格，不能再次自动发起识别（会死循环）；
+        # 普通 OCR 结果仍允许用户点「表格」触发一次重识别。
+        self._table_requested = bool(prefer_table)
         self._showing_translation = False
         self.seg.set("文本")
         self._show_text_page()

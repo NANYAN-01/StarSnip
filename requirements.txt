@@ -1,3 +1,4 @@
+# pip install -r requirements.txt
 # 星剪 StarSnip 运行/打包依赖
 # 界面
 customtkinter>=5.2

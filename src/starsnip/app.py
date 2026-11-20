@@ -15,7 +15,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 from . import (ai_writer, beautify, capture, clipboard_image, config, imgconv,
-               mdblocks, ocr_core, screenfiles, tablefmt, theme)
+               ocr_core, screenfiles, theme)
 from .history import History
 from .history_ui import HistoryWindow
 from .hotkey import HotkeyManager
@@ -27,8 +27,6 @@ from .settings_ui import SettingsWindow
 from .toast import Toast
 from .tray import SystemTray
 from .ui import ResultWindow, VerifyWindow
-from .writers.docx import build_docx
-from .writers.xlsx import build_xlsx
 
 APP_LABEL = "星剪 StarSnip"
 
@@ -163,11 +161,11 @@ class App:
                 APP_LABEL, self.cfg["hotkey"],
                 self.cfg.get("hotkey_capture_only", "")),
             log=self.log.info,
-            on_hotkey=lambda: self.events.put({"type": "hotkey_settings"}),
             on_log=lambda: self.events.put({"type": "log"}),
             on_settings=lambda: self.events.put({"type": "settings"}),
             icon_path=theme.icon_ico("starsnip.ico"),
-            on_capture_only=lambda: self.events.put({"type": "capture_only"}))
+            on_capture_only=lambda: self.events.put({"type": "capture_only"}),
+            on_activate=lambda: self.events.put({"type": "activate"}))
         if not self.tray.start():
             self.log.info("tray start failed: %s" % self.tray.error)
             messagebox.showwarning("托盘初始化失败",
@@ -201,7 +199,6 @@ class App:
                 self._handle(event)
         except queue.Empty:
             pass
-        self._polling = True  # 已挂载；after 重新排队
         self.root.after(60, self._poll)
 
     def _handle(self, event: dict) -> None:
@@ -218,26 +215,30 @@ class App:
             self._open_config()
         elif kind == "log":
             self._open_log()
-        elif kind == "hotkey_settings":
-            self.open_hotkey_settings()
+        elif kind == "activate":
+            # 第二次启动被单实例锁拦下，广播消息到这里：告诉用户已在运行
+            self.log.info("second launch detected: already running")
+            self.toast.show("星剪已在运行 · %s 截图识别"
+                            % self.cfg.get("hotkey", ""),
+                            int(self.cfg.get("toast_ms", 2000)))
         elif kind == "exit":
             self.shutdown()
         elif kind == "ocr_done":
             self.busy = False
-            result = event["results"][0]
-            self.log.info("ocr: model=%s ok=%s %dms" % (
-                result.get("model"), result.get("ok"),
-                result.get("elapsed_ms", 0)))
-            self._show_result(result, event["results"])
+            result = event["result"]
+            self.log.info("ocr: model=%s %dms" % (
+                result.get("model"), result.get("elapsed_ms", 0)))
+            self._show_result(result)
         elif kind == "table_done":
             self.busy = False
-            self._show_table_result(event["results"])
+            self._show_table_result(event["result"])
         elif kind == "verify_done":
             self._show_verify(event["results"])
         elif kind == "export_done":
             self.busy = False
             self.last_export = event["path"]
-            self.log.info("export: %s" % event["path"])
+            self.log.info("export %s: %s" % (event.get("fmt", ""),
+                                             event["path"]))
             if self.window:
                 self.window.status_note("已导出：%s"
                                         % os.path.basename(event["path"]))
@@ -263,13 +264,6 @@ class App:
                 self.window.status_note("识别失败：%s" % short)
 
     # ---------- 快捷键 / 配置 / 设置 ----------
-    def open_hotkey_settings(self) -> None:
-        if self.hotkey_dialog is not None and self.hotkey_dialog.winfo_exists():
-            self.hotkey_dialog.lift()
-            return
-        self.hotkey_dialog = HotkeyDialog(self.root, self.cfg["hotkey"],
-                                          self._apply_hotkey)
-
     def _apply_hotkey(self, spec: str, which: str = "ocr") -> None:
         """which="ocr" 改识别热键；which="capture" 改仅截图热键。"""
         key = "hotkey" if which == "ocr" else "hotkey_capture_only"
@@ -337,18 +331,22 @@ class App:
             self.log.info("save theme failed: %s" % exc)
 
     def _hotkey_from_settings(self, var):
-        def apply_(spec):
-            self._apply_hotkey(spec, "ocr")
-            var.set(spec)
-        dlg = HotkeyDialog(self.root, var.get(), apply_)
-        return dlg
+        self._open_hotkey_dialog(var, "ocr")
 
     def _hotkey_only_from_settings(self, var):
+        self._open_hotkey_dialog(var, "capture")
+
+    def _open_hotkey_dialog(self, var, which: str = "ocr") -> None:
+        """两个快捷键共用同一个录入对话框，已开着就抬起来，避免叠出多个。"""
+        if self.hotkey_dialog is not None and self.hotkey_dialog.winfo_exists():
+            self.hotkey_dialog.lift()
+            return
+
         def apply_(spec):
-            self._apply_hotkey(spec, "capture")
+            self._apply_hotkey(spec, which)
             var.set(spec)
-        dlg = HotkeyDialog(self.root, var.get(), apply_)
-        return dlg
+
+        self.hotkey_dialog = HotkeyDialog(self.root, var.get(), apply_)
 
     def _apply_settings(self, values: dict) -> None:
         for k, v in values.items():
@@ -360,15 +358,29 @@ class App:
                 return
         if "theme" in values:
             theme.apply_theme(values.get("theme", "system"))
+        if "history_enabled" in values:
+            self._apply_history_enabled(bool(values["history_enabled"]))
         self.toast.show("设置已保存")
 
+    def _apply_history_enabled(self, enabled: bool) -> None:
+        """历史开关即时生效（否则关掉后要重启才不记账，用户会以为没保存）。"""
+        if enabled and self.history is None:
+            self.history = History(keep=int(self.cfg.get("history_keep", 500)))
+            self.log.info("history enabled")
+        elif not enabled and self.history is not None:
+            if (self.history_window is not None
+                    and self.history_window.winfo_exists()):
+                self.history_window.destroy()
+                self.history_window = None
+            self.history.close()
+            self.history = None
+            self.log.info("history disabled")
+
     # ---------- 截图与 OCR ----------
-    def _trigger_capture(self, ocr: bool = None) -> None:
-        """开始截图取景。ocr=None 表示按配置 auto_ocr 决定是否识别。"""
+    def _trigger_capture(self, ocr: bool = True) -> None:
+        """开始截图取景。ocr=False 走「仅截图」（停留等 ✓/✕ 确认）。"""
         if self.busy:
             return
-        if ocr is None:
-            ocr = bool(self.cfg.get("auto_ocr", True))
         self._ocr_after_capture = ocr
         self.busy = True
         try:
@@ -436,16 +448,9 @@ class App:
             except Exception:  # noqa: BLE001
                 self.toast.show("图片未能写入剪贴板")
 
-    def _models(self):
-        if self.cfg.get("joint_enabled"):
-            models = list(self.cfg.get("joint_models") or [])
-            if models:
-                return models
-        return [self.cfg["default_model"]]
-
     def _run_ocr(self, prompt_override=None, event_type="ocr_done") -> None:
         png = self.png
-        models = self._models()
+        model = self.cfg.get("default_model") or ""
         url = self.cfg["ollama_url"]
         prompt = prompt_override or self.cfg.get("prompt", ocr_core.DEFAULT_PROMPT)
         timeout = float(self.cfg.get("timeout_s", 60))
@@ -453,23 +458,21 @@ class App:
 
         def work():
             try:
-                results = ocr_core.call_many(png, models, url, prompt=prompt,
-                                             timeout=timeout,
-                                             keep_alive=keep_alive)
+                result = ocr_core.call(png, model, url, prompt=prompt,
+                                       timeout=timeout, keep_alive=keep_alive)
             except Exception as exc:  # noqa: BLE001
                 self.events.put({"type": "error", "message": str(exc)})
                 return
-            if not any(r.get("ok") for r in results):
+            if not result.get("ok"):
                 self.events.put({"type": "error",
-                                 "message": "\n".join(
-                                     r.get("error") or "" for r in results)})
+                                 "message": result.get("error") or "识别失败"})
                 return
-            self.events.put({"type": event_type, "results": results})
+            self.events.put({"type": event_type, "result": result})
 
         threading.Thread(target=work, daemon=True).start()
 
     # ---------- 结果窗口 ----------
-    def _show_result(self, result: dict, results: list) -> None:
+    def _show_result(self, result: dict) -> None:
         self.result = result
         if self.window is None or not self.window.winfo_exists():
             self.window = ResultWindow(
@@ -480,18 +483,13 @@ class App:
         self.window.deiconify()
         self.window.lift()
         self.window.show_result(result)
-        self._record_history(result, results, mode="text")
+        self._record_history(result, mode="text")
 
-    def _show_table_result(self, results: list) -> None:
-        ok = [r for r in results if r.get("ok")]
-        if not ok or not self.window:
-            if not ok:
-                messagebox.showerror("表格识别失败",
-                                     "\n".join(r.get("error") or ""
-                                               for r in results))
+    def _show_table_result(self, result: dict) -> None:
+        if not self.window or not result.get("ok"):
             return
-        self.window.show_result(ok[0], prefer_table=True)
-        self._record_history(ok[0], ok, mode="table")
+        self.window.show_result(result, prefer_table=True)
+        self._record_history(result, mode="table")
 
     def _request_table(self, _window) -> None:
         if not self.png or self.busy:
@@ -501,8 +499,7 @@ class App:
                                                    ocr_core.TABLE_PROMPT),
                       event_type="table_done")
 
-    def _record_history(self, result: dict, results: list,
-                        mode: str = "text") -> None:
+    def _record_history(self, result: dict, mode: str = "text") -> None:
         if not self.history or not result.get("ok"):
             return
         try:
@@ -510,10 +507,7 @@ class App:
             self.history.add(
                 source=self.last_source, mode=mode, model=result["model"],
                 elapsed_ms=result["elapsed_ms"], text=result["text"],
-                thumb_png=self.thumb_png,
-                meta={"models": [r["model"] for r in results],
-                      "joint": bool(self.cfg.get("joint_enabled")),
-                      "size": size})
+                thumb_png=self.thumb_png, meta={"size": size})
         except Exception:  # noqa: BLE001
             pass
 
@@ -529,9 +523,18 @@ class App:
     def _verify(self, _window) -> None:
         if not self.png or self.busy:
             return
-        models = list(self.cfg.get("verify_models") or [])
+        # 主模型用当前选中的 OCR 模型，再补一个不同的模型做对照；
+        # 否则改过 OCR 模型后「校验」仍拿老模型跑，结果对不上。
+        models = [self.cfg.get("default_model") or ""]
+        for model in (self.cfg.get("verify_models") or []):
+            if model and model not in models:
+                models.append(model)
+        models = [m for m in models if m][:2]
         if len(models) < 2:
-            messagebox.showinfo("交叉校验", "verify_models 至少需要两个模型")
+            messagebox.showinfo(
+                "交叉校验",
+                "需要两个不同模型：请在 config.json 的 verify_models 里"
+                "填一个与当前 OCR 模型不同的模型。")
             return
         self.busy = True
         png = self.png
@@ -575,7 +578,7 @@ class App:
         self.busy = True
         model = (self.cfg.get("translate_model")
                  or self.cfg.get("layout_model")
-                 or "qwen3.5:4b")
+                 or config.DEFAULTS["layout_model"])
         url = self.cfg["ollama_url"]
         timeout = float(self.cfg.get("layout_timeout", 120))
         keep_alive = self.cfg.get("keep_alive", "30m")
@@ -645,7 +648,7 @@ class App:
         try:
             pil = imgconv.to_pil(self.crop_img)
             rendered = beautify.render(pil, self.cfg)
-            data = beautify._to_png_bytes(rendered)
+            data = beautify.png_bytes(rendered)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("美化失败", str(exc))
             return
@@ -663,43 +666,42 @@ class App:
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("保存失败", str(exc))
 
-    # ---------- 导出 ----------
+    # ---------- 导出（AI 排版） ----------
     def _export_file(self, window, fmt: str) -> None:
-        """把结果窗口的内容导出为 docx / xlsx / md / txt。
+        """AI 排版后导出 docx / xlsx / md / txt。
 
-        由 ResultWindow.on_export(window, fmt) 调用；表格视图已解析出的行
-        优先用于 XLSX，其余格式以当前文本（含译文）为准。
+        LLM 只负责把 OCR 文本整理成规范 Markdown（ai_writer.llm_layout），
+        二进制文件仍由本地 writers 生成；排版失败时 ai_writer 回退原文，
+        导出不会中断。排版模型固定用 config 的 layout_model，界面不提供选择。
         """
         text = (window._content() if window is not None else "") or ""
         if not text.strip():
             messagebox.showinfo("导出", "没有可导出的内容")
             return
-        rows = getattr(window, "_rows", None) or tablefmt.parse_table(text)
-        try:
-            if fmt == "docx":
-                blocks = mdblocks.parse_blocks(text)
-                if rows and not any(b["type"] == "table" for b in blocks):
-                    blocks.append({"type": "table", "rows": rows})
-                data = build_docx(blocks)
-            elif fmt == "xlsx":
-                if not rows:
-                    messagebox.showinfo("导出 XLSX",
-                                        "当前内容解析不出表格，请先切到「表格」视图")
-                    return
-                data = build_xlsx([rows])
-            elif fmt in ("md", "txt"):
-                data = text.encode("utf-8")
-            else:
-                raise ValueError("不支持的导出格式：%s" % fmt)
-            path = screenfiles.save_bytes(
-                data, self.cfg.get("export_dir") or None, fmt,
-                prefix="StarSnip")
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("导出失败", str(exc))
+        if self.busy:
             return
-        self.last_export = path
-        self.log.info("export %s -> %s (%d bytes)" % (fmt, path, len(data)))
-        self.toast.show("已导出：%s" % os.path.basename(path))
+        self.busy = True
+        model = self.cfg.get("layout_model") or config.DEFAULTS["layout_model"]
+        url = self.cfg["ollama_url"]
+        timeout = float(self.cfg.get("layout_timeout", 120))
+        keep_alive = self.cfg.get("keep_alive", "30m")
+        directory = self.cfg.get("export_dir") or None
+        if window is not None:
+            window.status_note("AI 排版中…")
+
+        def work():
+            try:
+                path, _md = ai_writer.export(
+                    text, fmt, model, url, directory=directory,
+                    timeout=timeout, keep_alive=keep_alive)
+            except Exception as exc:  # noqa: BLE001
+                self.events.put({"type": "export_error",
+                                 "message": "%s: %s"
+                                            % (type(exc).__name__, exc)})
+                return
+            self.events.put({"type": "export_done", "path": path, "fmt": fmt})
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------- 历史窗口 ----------
     def open_history(self) -> None:

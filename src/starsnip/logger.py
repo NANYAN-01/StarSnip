@@ -26,8 +26,3 @@ class Logger:
                 f.write(line)
         except OSError:
             pass
-
-    def exception(self, exc: BaseException) -> None:
-        import traceback
-        self.info("EXCEPTION %s: %s" % (type(exc).__name__, exc))
-        self.info(traceback.format_exc())

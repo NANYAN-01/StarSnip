@@ -63,26 +63,28 @@ class HotkeyDialog(ctk.CTkToplevel):
         self.geometry("400x220")
         self.resizable(False, False)
         self.attributes("-topmost", True)
+        self._F = theme.Fonts()
         self.on_save = on_save
         self.spec = None
 
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=20, pady=18)
-        ctk.CTkLabel(frame, text="请按下新的组合键", font=theme.font(15, "bold"),
+        ctk.CTkLabel(frame, text="请按下新的组合键", font=self._F.title,
                      text_color=theme.FG).pack(anchor="w")
         ctk.CTkLabel(frame, text="需包含 Ctrl / Alt / Shift / Win，或 F1–F24",
-                     font=theme.font(12), text_color=theme.FG_SECONDARY).pack(anchor="w",
-                                                                              pady=(2, 12))
+                     font=self._F.small,
+                     text_color=theme.FG_SECONDARY).pack(anchor="w", pady=(2, 12))
 
         self.display = tk.StringVar(value=current)
         card = ctk.CTkFrame(frame, corner_radius=theme.RADIUS, fg_color=theme.SURFACE_SOFT,
                             border_width=1, border_color=theme.SEPARATOR, height=58)
         card.pack(fill="x")
         card.pack_propagate(False)
-        ctk.CTkLabel(card, textvariable=self.display, font=theme.font(20, "bold", mono=True),
+        ctk.CTkLabel(card, textvariable=self.display,
+                     font=self._F.mono_big,
                      text_color=theme.ACCENT).place(relx=0.5, rely=0.5, anchor="center")
 
-        self.hint = ctk.CTkLabel(frame, text="", font=theme.font(12),
+        self.hint = ctk.CTkLabel(frame, text="", font=self._F.small,
                                  text_color=theme.DANGER)
         self.hint.pack(anchor="w", pady=(8, 0))
 

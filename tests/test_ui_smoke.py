@@ -10,6 +10,7 @@
 import os
 import sys
 import tempfile
+import time
 import types
 
 import os as _os
@@ -76,8 +77,8 @@ def test_settings(root):
 
     # 模型必须是可下拉的 Combobox（之前是纯输入框，用户无法选择）
     check(type(win.model_e).__name__ == "CTkComboBox", "OCR 模型是可下拉框")
-    check(type(win.layout_e).__name__ == "CTkComboBox", "排版模型是可下拉框")
     check(hasattr(win, "refresh_models"), "支持从后端刷新模型列表")
+    check(not hasattr(win, "layout_e"), "排版模型不再提供选择（固定用默认模型）")
 
     check(win.model_e.get().strip() != "", "OCR 模型输入框有值")
     check(win.url_e.get().startswith("http"), "Ollama 地址输入框有值")
@@ -93,10 +94,60 @@ def test_settings(root):
     check(ctk.get_appearance_mode() == "Light", "主题可切回 Light")
 
     win._save()
-    expect = {"ollama_url", "default_model", "layout_model", "theme",
-              "image_dir", "export_dir", "joint_enabled", "clipboard_image",
-              "history_enabled", "beautify_bg", "auto_ocr"}
+    expect = {"ollama_url", "default_model", "theme", "image_dir",
+              "export_dir", "save_image", "clipboard_image",
+              "history_enabled", "beautify_bg"}
     check(expect <= set(saved), "保存回传了全部设置键")
+    check("layout_model" not in saved, "保存不会改动排版模型（界面不提供）")
+
+    # 开机启动：等初始检查结束，再用桩跑勾选/取消（不动真实计划任务）
+    deadline = time.time() + 5
+    while time.time() < deadline and win._autostart_busy:
+        root.update()
+        time.sleep(0.02)
+    check(not win._autostart_busy, "开机启动初始状态检查完成")
+    check(hasattr(win, "autostart_cb"), "开机启动复选框已布局")
+    from starsnip import settings_ui
+    st = {"on": False}
+    saved_fns = (settings_ui.autostart.is_enabled,
+                 settings_ui.autostart.is_elevated,
+                 settings_ui.autostart.enable,
+                 settings_ui.autostart.disable)
+    settings_ui.autostart.is_enabled = lambda: st["on"]
+    settings_ui.autostart.is_elevated = lambda: True
+
+    def _fake_enable():
+        st["on"] = True
+        return True, "已创建计划任务"
+
+    def _fake_disable():
+        st["on"] = False
+        return True, "已删除计划任务"
+
+    settings_ui.autostart.enable = _fake_enable
+    settings_ui.autostart.disable = _fake_disable
+    try:
+        win.autostart_cb.select()
+        win._toggle_autostart()
+        deadline = time.time() + 3
+        while time.time() < deadline and win._autostart_busy:
+            root.update()
+            time.sleep(0.02)
+        check(st["on"] and "已创建" in win.autostart_status.cget("text"),
+              "勾选后创建计划任务：%s" % win.autostart_status.cget("text"))
+        win.autostart_cb.deselect()
+        win._toggle_autostart()
+        deadline = time.time() + 3
+        while time.time() < deadline and win._autostart_busy:
+            root.update()
+            time.sleep(0.02)
+        check(not st["on"] and "已删除" in win.autostart_status.cget("text"),
+              "取消勾选后删除计划任务：%s" % win.autostart_status.cget("text"))
+    finally:
+        (settings_ui.autostart.is_enabled,
+         settings_ui.autostart.is_elevated,
+         settings_ui.autostart.enable,
+         settings_ui.autostart.disable) = saved_fns
     win.destroy()
 
 
@@ -135,12 +186,20 @@ def test_result(root):
     root.update()
     rows = w.tree.get_children()
     check(len(rows) == 2, "表格视图解析出 2 行（实际 %d）" % len(rows))
-    check(w._rows is not None, "解析结果缓存在 _rows（导出 XLSX 依赖）")
+    check(w._rows is not None, "解析结果缓存在 _rows（表格视图复用）")
 
     w._verify(); w._retry(); w._translate(); w._pin()
     w._on_export_pick("导出 美化分享图 PNG")   # 美化走 on_beautify，无独立方法
     for name in ("verify", "retry", "translate", "pin", "beautify"):
         check(name in calls, "按钮 %s 回调已触发" % name)
+
+    # 表格重识别仍解析不出表格时，不能再次自动发起识别（旧实现会无限重识别）
+    calls.clear()
+    w.show_result({"ok": True, "model": "glm-ocr:latest", "elapsed_ms": 10,
+                   "text": "纯文本，没有表格结构"}, prefer_table=True)
+    root.update()
+    check(calls.count("table") == 0, "表格解析失败后不再自动重复识别")
+    check(w.seg.get() == "文本", "解析失败自动回到文本视图（%s）" % w.seg.get())
 
     w._close()
     check("close" in calls, "关闭回调已触发")
@@ -274,6 +333,16 @@ def test_overlay_confirm(root):
           % len(ov._toolbar))
     check(got.get("b") is None, "确认前不回调（用户可先核对）")
 
+    # 布局回归：提示文字必须完全在面板内；两个按钮不能挤在一起
+    panel = ov.canvas.bbox(ov._toolbar[0])
+    hint = ov.canvas.bbox(ov._toolbar[-1])
+    check(hint[0] >= panel[0] and hint[2] <= panel[2] - 2,
+          "提示文字在面板内（hint=%s panel=%s）" % (hint, panel))
+    ok_btn = ov.canvas.bbox(ov._toolbar[1])
+    no_btn = ov.canvas.bbox(ov._toolbar[3])
+    check(no_btn[0] - ok_btn[2] >= 8,
+          "保存/取消按钮间距 ≥ 8px（实际 %d）" % (no_btn[0] - ok_btn[2]))
+
     # 点 ✓ 才真正交付
     ov._accept()
     root.update()
@@ -324,7 +393,7 @@ def test_pin_and_beautify(root):
     pad = max(28, int(min(240, 160) * 0.1))
     check(out.size == (240 + pad * 2, 160 + pad * 2),
           "美化图尺寸含留白 %s" % (out.size,))
-    check(len(beautify._to_png_bytes(out)) > 1000, "美化图可编码为 PNG")
+    check(len(beautify.png_bytes(out)) > 1000, "美化图可编码为 PNG")
 
 
 def test_capture_only(root):
@@ -344,12 +413,12 @@ def test_capture_only(root):
     check(not calls, "仅截图模式下不调用 OCR")
     check(app.busy is False, "仅截图后 busy 已复位（还能继续截图）")
 
-    # auto_ocr=False 时，普通热键也默认不识别
-    app.cfg["auto_ocr"] = False
-    app._trigger_capture()
-    root.update()
-    check(app._ocr_after_capture is False, "auto_ocr=False 让热键只截图")
-    app._on_cancel()
+    # 第二次启动被单实例锁拦下后，广播消息要变成「已在运行」轻提示
+    shown = []
+    app.toast.show = lambda text, ms=None: shown.append(text)
+    app._handle({"type": "activate"})
+    check(shown and "已在运行" in shown[-1],
+          "第二次启动提示：%s" % (shown[-1] if shown else "（无）"))
 
 
 def main():

@@ -9,7 +9,7 @@ import urllib.request
 
 import customtkinter as ctk
 
-from . import __version__, capture, config
+from . import __version__, capture, config, single_instance
 from .app import App
 
 
@@ -94,7 +94,7 @@ def main(argv=None) -> int:
     parser.add_argument("--check", action="store_true",
                         help="检查 Ollama 服务连通性并列出模型")
     parser.add_argument("--models", action="store_true",
-                        help="只列出后端可用模型（设置里下拉框同源）")
+                        help="列出后端模型，并标出可作为 OCR 模型的那些")
     parser.add_argument("--history", action="store_true",
                         help="直接打开历史记录窗口")
     parser.add_argument("--settings", action="store_true",
@@ -169,13 +169,17 @@ def main(argv=None) -> int:
     if args.models:
         from . import ocr_core
         url = cfg["ollama_url"]
-        names = ocr_core.list_models(url)
-        if not names:
+        items = ocr_core.list_models_detail(url)
+        if not items:
             print("无法从 %s 获取模型列表（后端不可用？）" % url)
             return 2
-        print("后端 %s 共 %d 个模型（设置里的下拉框同源）：" % (url, len(names)))
-        for name in names:
-            print("  %s" % name)
+        ocr_names = ocr_core.list_ocr_models(url)
+        print("后端 %s 共 %d 个模型；设置里只列 OCR 模型（%d 个）："
+              % (url, len(items), len(ocr_names)))
+        for item in items:
+            caps = ",".join(item["capabilities"])
+            ocr = "OCR" if item["name"] in ocr_names else "   "
+            print("  [%s] %-44s %s" % (ocr, item["name"], caps))
         return 0
 
     if args.check:
@@ -199,6 +203,16 @@ def main(argv=None) -> int:
         capture.save_png(img, args.capture_test)
         print("saved %s (%dx%d) origin=%s" % (args.capture_test, img.width,
                                               img.height, img.origin))
+        return 0
+
+    # 常驻模式（无 --history/--settings/--file）只允许一个实例：
+    # 已有实例就通知它弹个「已在运行」，自己退出，避免两个托盘/热键互抢。
+    resident = not (args.history or args.settings or args.file)
+    if resident and not single_instance.acquire():
+        single_instance.notify_running()
+        from .logger import Logger
+        Logger().info("second instance: another one is running; notified it"
+                      " and exited")
         return 0
 
     # GUI 模式：以 customtkinter 根窗口驱动（隐藏，由托盘/热键唤起）

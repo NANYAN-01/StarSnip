@@ -3,11 +3,12 @@ import json
 import os
 import sys
 
+from . import ocr_core
+
 DEFAULTS = {
     "ollama_url": "http://127.0.0.1:11434",
     "default_model": "glm-ocr:latest",
-    "joint_enabled": False,
-    "joint_models": ["glm-ocr:latest", "richardyoung/unlimited-ocr:latest"],
+    # 交叉校验的对照模型；主模型始终用当前选中的 OCR 模型，同名的会被跳过
     "verify_models": ["glm-ocr:latest", "richardyoung/unlimited-ocr:latest"],
     "hotkey": "ctrl+2",
     "hotkey_capture_only": "ctrl+1",
@@ -16,7 +17,6 @@ DEFAULTS = {
     "history_enabled": True,
     "history_keep": 500,
     "save_image": True,
-    "auto_ocr": True,
     "image_dir": "",
     "clipboard_image": True,
     "toast_ms": 2000,
@@ -30,8 +30,10 @@ DEFAULTS = {
     "pin_alpha": 1.0,
     "beautify_bg": "white",
     "beautify_pad_ratio": 0.08,
-    "prompt": "请识别图片中的所有文字内容，按原样逐行输出，不要遗漏，不要翻译。表格请保持行列对齐。",
-    "table_prompt": "请将图片中的表格转换为 Markdown 表格，包含表头与所有数据行，保留合计行，数字不得遗漏或改动。只输出 Markdown。",
+    "beautify_radius_ratio": 0.025,
+    # 提示词只维护一份：ocr_core 的常量即默认值，config.json 里改同名键可覆盖
+    "prompt": ocr_core.DEFAULT_PROMPT,
+    "table_prompt": ocr_core.TABLE_PROMPT,
 }
 
 def _default_config_path() -> str:

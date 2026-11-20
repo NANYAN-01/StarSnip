@@ -3,7 +3,7 @@
 import json
 import urllib.request
 
-from . import mdblocks, screenfiles
+from . import mdblocks, screenfiles, tablefmt
 from .writers import docx as docx_writer
 from .writers import xlsx as xlsx_writer
 
@@ -70,13 +70,27 @@ def blocks_to_text(blocks) -> str:
 
 def export(text: str, fmt: str, model: str, url: str, directory: str = None,
            timeout: float = 120.0, keep_alive: str = "30m") -> tuple:
-    """Returns (file_path, markdown_used)."""
+    """Returns (file_path, markdown_used).
+
+    文本里已经有结构化表格（Markdown / HTML）时，直接按行列本地生成：
+    不让大模型重写表格，避免它改数字、并错列或把表格改坏（表格页最常见）。
+    只有普通文本才走 AI 排版。
+    """
     if fmt not in FORMATS:
         raise ValueError("unsupported format: %s" % fmt)
-    md = layout_markdown(text, model, url, timeout, keep_alive=keep_alive)
-    blocks = mdblocks.parse_blocks(md)
+    rows = tablefmt.structured_table(text)
+    if rows:
+        md = text
+        blocks = mdblocks.parse_blocks(md)
+        if not any(b["type"] == "table" for b in blocks):
+            blocks.append({"type": "table", "rows": rows})
+    else:
+        md = layout_markdown(text, model, url, timeout, keep_alive=keep_alive)
+        blocks = mdblocks.parse_blocks(md)
     if fmt == "md":
-        data = md.encode("utf-8")
+        # 对齐列文本导 .md 时补成 Markdown 表格；本来就是 Markdown 则原样保留
+        data = (md if rows is None or "|" in md
+                else tablefmt.to_markdown(rows)).encode("utf-8")
     elif fmt == "txt":
         data = blocks_to_text(blocks).encode("utf-8")
     elif fmt == "docx":

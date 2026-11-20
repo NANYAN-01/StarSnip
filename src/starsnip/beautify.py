@@ -63,12 +63,8 @@ def render(pil, cfg=None):
     return canvas
 
 
-def export(pil, cfg=None):
-    """渲染并返回 PNG 字节。"""
-    return _to_png_bytes(render(pil, cfg))
-
-
-def _to_png_bytes(im):
+def png_bytes(im):
+    """把渲染结果编码为 PNG 字节。"""
     buf = io.BytesIO()
     im.save(buf, "PNG", optimize=True)
     return buf.getvalue()

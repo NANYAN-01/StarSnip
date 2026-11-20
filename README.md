@@ -32,19 +32,24 @@ Word / TXT / XLSX / Markdown。识别与排版走后端 Ollama（默认本机 `h
 
 ## 主要功能
 
-1. **截图识别**：全局热键（默认 `Ctrl+Alt+O`）→ 取景框选 → OCR；`Esc` 取消，`Enter` 确认。
+1. **截图识别**：全局热键（默认 `Ctrl+2`）→ 取景框选 → OCR；`Esc` 取消，`Enter` 确认。
 2. **结果浮窗**：文本 / 表格双视图；复制全部 / 选中；表格一键复制 TSV / Markdown。
 3. **截图副作用**（可配）：自动存 PNG 到 `图片\StarSnip\`，并写入系统剪贴板，右下角轻提示。
 4. **一键翻译**：用通用模型对识别结果做中 ↔ 英互译，再点还原原文。
 5. **贴图钉屏**：把截图钉在桌面最上层，可拖动、滚轮缩放、右键复制 / 另存 / 关闭。
 6. **美化分享图**：给截图加圆角、柔和投影与留白背景，一键导出 PNG 并复制。
-7. **AI 排版导出**：LLM 整理为规范 Markdown 后本地转换为 Word / TXT / XLSX / Markdown。
-8. **表格模式**：解析失败时自动用表格提示词重新识别为 Markdown 表格。
-9. **交叉校验**：两个模型并排识别，主结果与其它模型不一致的行高亮。
+7. **AI 排版导出**：默认排版模型把 OCR 文本整理为规范 Markdown，再本地转换为 Word / TXT / XLSX / Markdown（排版失败自动回退原文）。已解析出表格时直接按行列本地生成，不经过模型——数字不会被改写。
+8. **表格模式**：解析失败时用表格提示词重新识别一次；模型给 Markdown 管道表或 HTML 表格都能解析（HTML 会转成 Markdown），不会反复重试。
+9. **交叉校验**：主模型用当前 OCR 模型，再并排跑一个对照模型，不一致的行高亮。
 10. **历史记录**：SQLite + 缩略图，支持搜索 / 预览 / 复制 / 删除 / 清空。
-11. **设置中心**：界面主题（跟随系统 / 浅色 / 深色）、快捷键、模型、目录、开关集中配置。
-12. **托盘 + 全局热键**：左键截图，右键菜单含截图 / 历史 / 设置 / 快捷键 / 日志 / 退出。
+11. **设置中心**：界面主题（跟随系统 / 浅色 / 深色）、快捷键、开机启动、OCR 模型（只列 OCR 专用模型）、目录、截图后处理集中配置；排版/翻译模型固定用默认值，不提供选择。
+12. **托盘 + 全局热键**：左键截图，右键菜单含截图 / 仅截图 / 历史 / 设置 / 配置文件 / 日志 / 退出（快捷键在设置里改）。
 13. **MCP 服务**：`--mcp` 以 stdio 暴露 `screen_capture_ocr` 给 Agent 调用。
+14. **单实例**：重复双击 exe / 再次运行不会起第二个常驻进程；已运行的实例会轻提示「已在运行」，新进程直接退出。
+15. **开机启动**：设置里勾选「登录 Windows 后自动启动星剪」即创建 Windows 计划任务（登录时触发），取消勾选会删除；创建/删除需要一次管理员授权（UAC）。
+
+> 设计取舍：只保留一条多模型路径（按需「校验双模型」），不再有「联合识别」开关；
+> 截图是否识别由两个热键分工决定，不再有全局 `auto_ocr` 开关——选项越少，行为越可预期。
 
 ## 快速开始
 
@@ -94,25 +99,23 @@ tools\build_exe.bat        :: 产出 dist\StarSnip.exe，并复制 config.json �
 |---|---|---|
 | `ollama_url` | `http://127.0.0.1:11434` | Ollama 后端地址（真实内网地址建议放 `config.local.json`，避免提交进仓库） |
 | `default_model` | `glm-ocr:latest` | OCR 识别模型 |
-| `layout_model` | `qwen3.5:4b` | AI 排版 / 翻译模型（强制 `think:false`） |
+| `layout_model` | `qwen3.5:4b` | AI 排版 / 翻译用的默认模型（强制 `think:false`；界面不提供选择，改这里即可换模型） |
 | `theme` | `system` | 界面主题：`system`/`light`/`dark` |
 | `hotkey` | `ctrl+2` | 全局热键：截图并 OCR 识别 |
 | `hotkey_capture_only` | `ctrl+1` | 全局热键：仅截图（拖完停留，✓ 保存 / ✕ 放弃） |
-| `verify_models` / `joint_models` | glm-ocr + unlimited-ocr | 校验 / 联合识别模型 |
-| `joint_enabled` | `false` | 联合识别开关 |
+| `verify_models` | glm-ocr + unlimited-ocr | 交叉校验的对照模型；主模型始终是当前 OCR 模型，同名项自动跳过 |
 | `max_side_px` | `1280` | 送识别长边上限 |
 | `timeout_s` / `layout_timeout` | 60 / 120 | 识别 / 排版超时 |
 | `keep_alive` | `30m` | Ollama 模型保活 |
 | `save_image` / `image_dir` | `true` / `""` | 截图保存与目录（空=`图片\StarSnip`） |
-| `auto_ocr` | `true` | 截图后自动识别；关闭 = 只截图/存剪贴板（托盘菜单另有「仅截图（不识别）」） |
 | `clipboard_image` | `true` | 截图写入系统剪贴板 |
 | `toast_ms` | `2000` | 轻提示停留毫秒 |
 | `export_dir` | `""` | 导出目录（空=`文档\StarSnip`） |
 | `pin_alpha` | `1.0` | 贴图默认不透明度 |
-| `beautify_bg` / `beautify_pad_ratio` | `white` / `0.08` | 美化分享图背景与留白比例 |
-| `translate_model` | `""`（回退 `layout_model`） | 翻译专用模型（可选） |
+| `beautify_bg` / `beautify_pad_ratio` / `beautify_radius_ratio` | `white` / `0.08` / `0.025` | 美化分享图背景、留白比例与圆角比例 |
+| `translate_model` | `""`（回退 `layout_model`） | 翻译专用模型（可选，仅配置文件） |
 | `history_enabled` / `history_keep` | `true` / `500` | 历史开关与保留条数 |
-| `prompt` / `table_prompt` | 见文件 | OCR / 表格提示词 |
+| `prompt` / `table_prompt` | 见 `ocr_core.py` | OCR / 表格提示词（默认值单源在常量，config 中可覆盖） |
 
 环境变量：`OLLAMA_URL`、`OLLAMA_MODEL`、`STARSNIP_HOME`（兼容旧 `SCREENOCR_HOME`）。
 
@@ -139,10 +142,10 @@ StarSnip/
 │  ├─ beautify.py      # 美化分享图（Pillow）
 │  ├─ imgconv.py       # 截图↔Pillow 互转
 │  ├─ capture.py / png.py / clipboard_image.py # GDI 截图 / 编码 / 剪贴板
-│  ├─ hotkey.py / tray.py                      # 全局热键 / 托盘（含自定义图标）
+│  ├─ hotkey.py / tray.py / single_instance.py # 全局热键 / 托盘 / 单实例锁
 │  ├─ ocr_core.py / ai_writer.py / mdblocks.py # Ollama 调用 / 排版+翻译 / Markdown 解析
 │  ├─ tablefmt.py / writers/{docx,xlsx}.py     # 表格 / 零依赖 OOXML 写入
-│  ├─ history.py / screenfiles.py / paths.py / logger.py / config.py
+│  ├─ history.py / screenfiles.py / paths.py / logger.py / config.py / autostart.py
 │  └─ mcp_server.py
 ├─ tests/              # 逐项独立脚本（见下）
 └─ docs/               # 开发计划 / 工作日志（历史进度）

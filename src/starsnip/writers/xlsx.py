@@ -5,7 +5,10 @@ import re
 import zipfile
 from xml.sax.saxutils import escape
 
-_NUMERIC = re.compile(r"^-?\d+(?:\.\d+)?$")
+# 纯数字才写成数值单元格：保留 "007" 这类前导零编码为文本，
+# "1,234.56" 这类千分位写法转成数值（Excel 里才对得上金额列）
+_NUMERIC = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
+_NUMERIC_COMMA = re.compile(r"^-?(?:0|[1-9]\d{0,2})(?:,\d{3})+(?:\.\d+)?$")
 
 
 def _col_name(idx: int) -> str:
@@ -21,6 +24,8 @@ def _cell(ref: str, value: str) -> str:
     text = (value or "").strip()
     if _NUMERIC.match(text):
         return '<c r="%s"><v>%s</v></c>' % (ref, text)
+    if _NUMERIC_COMMA.match(text):
+        return '<c r="%s"><v>%s</v></c>' % (ref, text.replace(",", ""))
     return ('<c r="%s" t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>'
             % (ref, escape(text)))
 

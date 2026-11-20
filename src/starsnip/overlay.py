@@ -6,17 +6,23 @@
 """
 
 import tkinter as tk
+import tkinter.font as tkfont
 
 ACCENT = "#6C5CE7"
 STIPPLE = "gray50"          # tk 没有真 alpha，用点阵近似半透明压暗
 
 
+def _rounded_points(x0, y0, x1, y1, r):
+    """圆角矩形的多边形顶点（Canvas 的 rectangle 不支持 radius）。"""
+    return [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+            x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+            x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+
+
 def _rounded_rect(canvas, x0, y0, x1, y1, r, **kw):
-    """用平滑多边形近似圆角矩形（Canvas 的 rectangle 不支持 radius）。"""
-    pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
-           x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
-           x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
-    return canvas.create_polygon(pts, smooth=True, **kw)
+    """用平滑多边形近似圆角矩形。"""
+    return canvas.create_polygon(_rounded_points(x0, y0, x1, y1, r),
+                                 smooth=True, **kw)
 
 
 class SelectionOverlay:
@@ -38,6 +44,17 @@ class SelectionOverlay:
         self.top.attributes("-topmost", True)
         self.top.geometry("%dx%d%+d%+d" % (sw, sh, self._sx, self._sy))
 
+        # 字号按 pt 走、会随 DPI 放大，硬编码像素（半径/内边距/宽度）不会，
+        # 所以统一乘 _dpi，并用字体度量算宽度——否则 150% 缩放下文字会顶出胶囊。
+        self._dpi = max(1.0, min(3.0, self.top.winfo_fpixels("1i") / 96.0))
+        self._f_tip = tkfont.Font(root=self.top, family="Segoe UI", size=12)
+        self._f_btn = tkfont.Font(root=self.top, family="Segoe UI", size=12,
+                                  weight="bold")
+        self._f_hint = tkfont.Font(root=self.top, family="Segoe UI", size=9)
+        self._f_size = tkfont.Font(root=self.top, family="Consolas", size=11,
+                                   weight="bold")
+        self._btn_recolors = {}
+
         self.canvas = tk.Canvas(self.top, bg="#0b0b0d", highlightthickness=0,
                                 cursor="crosshair")
         self.canvas.pack(fill="both", expand=True)
@@ -56,28 +73,40 @@ class SelectionOverlay:
             for _ in range(4)]
         self._dim_outside(0, 0, 0, 0)   # 初始：整屏压暗
 
-        # 顶部提示胶囊
+        # 顶部提示胶囊：宽度按实际字体度量 + 留白，不再用「字数×12」估算
         if self.confirm:
-            tip = "拖拽框选  ·  松开后点 ✓ 保存 / ✕ 取消"
+            tip = "拖拽框选  ·  松开后点「保存」或「取消」"
         else:
             tip = "拖拽框选识别区域  ·  Enter 确认  ·  Esc 取消"
-        tw = 12 * len(tip) + 48
-        _rounded_rect(self.canvas, sw // 2 - tw // 2, 16,
-                      sw // 2 + tw // 2, 54, 19,
+        tw = self._f_tip.measure(tip) + self._px(44)
+        th = self._px(38)
+        tip_y = self._px(14)
+        tx0 = max(self._px(8), sw // 2 - tw // 2)
+        tx1 = min(sw - self._px(8), tx0 + tw)
+        _rounded_rect(self.canvas, tx0, tip_y, tx1, tip_y + th, th // 2,
                       fill="#1c1c1e", outline="")
-        self.canvas.create_text(sw // 2, 35, fill="#f2f2f7",
-                                font=("Segoe UI", 12), text=tip)
+        self.canvas.create_text((tx0 + tx1) // 2, tip_y + th // 2,
+                                fill="#f2f2f7", font=self._f_tip, text=tip)
+        self._tip_bottom = tip_y + th
 
-        # 尺寸标签（矩形底 + 文字，随拖拽移动）
-        self._size_bg = self.canvas.create_rectangle(
-            0, 0, 0, 0, fill=ACCENT, outline="", state="hidden")
-        self._size_tx = self.canvas.create_text(
-            0, 0, fill="#ffffff", font=("Consolas", 11, "bold"), text="",
+        # 尺寸标签（圆角底 + 文字，随拖拽移动）
+        self._size_bg = self.canvas.create_polygon(
+            0, 0, 0, 0, 0, 0, smooth=True, fill=ACCENT, outline="",
             state="hidden")
+        self._size_tx = self.canvas.create_text(
+            0, 0, fill="#ffffff", font=self._f_size, text="", state="hidden")
 
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_move)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        # 标签绑一次即可（tag 还没画出来也能先绑）
+        self.canvas.tag_bind("btn_ok", "<Button-1>", lambda e: self._accept())
+        self.canvas.tag_bind("btn_no", "<Button-1>", lambda e: self.cancel())
+        for tag in ("btn_ok", "btn_no"):
+            self.canvas.tag_bind(tag, "<Enter>",
+                                 lambda e, t=tag: self._hover(t, True))
+            self.canvas.tag_bind(tag, "<Leave>",
+                                 lambda e, t=tag: self._hover(t, False))
         self.top.bind("<Escape>", lambda e: self.cancel())
         self.top.bind("<Return>", lambda e: self._confirm_current())
         self.top.focus_force()
@@ -113,16 +142,22 @@ class SelectionOverlay:
             self.canvas.coords(rect, *box)
 
 
+    def _px(self, value):
+        """按当前 DPI 缩放像素值（字体是 pt 会自动放大，间距/半径要自己跟上）。"""
+        return int(round(value * self._dpi))
+
     def _redraw_frame(self, x1, y1, x2, y2):
         for item in self._handles + [self._rect]:
             if item:
                 self.canvas.delete(item)
         self._handles = []
         self._rect = self.canvas.create_rectangle(
-            x1, y1, x2, y2, outline=ACCENT, width=2)
+            x1, y1, x2, y2, outline=ACCENT, width=self._px(2))
+        half = self._px(4)
         for (hx, hy) in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)):
             self._handles.append(self.canvas.create_rectangle(
-                hx - 4, hy - 4, hx + 4, hy + 4, fill=ACCENT, outline=""))
+                hx - half, hy - half, hx + half, hy + half,
+                fill=ACCENT, outline=""))
 
     def _on_press(self, event):
         self._clear_toolbar()          # 重新框选：先撤掉上一次的 ✓/✕
@@ -149,13 +184,16 @@ class SelectionOverlay:
             return
         label = "%d × %d" % (w, h)
         lx, ly = min(x1, x2), min(y1, y2)
-        tw, th = 8 * len(label) + 16, 20
-        tx, ty = lx + 6, ly - th - 6
-        if ty < 62:                       # 不要压住顶部提示胶囊
-            ty = ly + 6
-        tx = min(max(4, tx), self._sw - tw - 4)
-        ty = min(max(4, ty), self._sh - th - 4)
-        self.canvas.coords(self._size_bg, tx, ty, tx + tw, ty + th)
+        tw = self._f_size.measure(label) + self._px(18)
+        th = self._px(24)
+        tx, ty = lx + self._px(6), ly - th - self._px(6)
+        if ty < self._tip_bottom + self._px(6):   # 不要压住顶部提示胶囊
+            ty = ly + self._px(6)
+        tx = min(max(self._px(6), tx), self._sw - tw - self._px(6))
+        ty = min(max(self._px(6), ty), self._sh - th - self._px(6))
+        self.canvas.coords(self._size_bg,
+                           *_rounded_points(tx, ty, tx + tw, ty + th,
+                                            self._px(6)))
         self.canvas.coords(self._size_tx, tx + tw / 2, ty + th / 2)
         self.canvas.itemconfigure(self._size_tx, text=label)
         self.canvas.itemconfigure(self._size_bg, state="normal")
@@ -174,45 +212,74 @@ class SelectionOverlay:
             except tk.TclError:
                 pass
         self._toolbar = []
+        self._btn_recolors = {}
         self._pending_bbox = None
+        try:
+            self.canvas.configure(cursor="crosshair")
+        except tk.TclError:
+            pass
+
+    def _hover(self, tag, on):
+        item = self._btn_recolors.get(tag)
+        if not item:
+            return
+        rect, base, hover = item
+        try:
+            self.canvas.itemconfigure(rect, fill=hover if on else base)
+            self.canvas.configure(cursor="hand2" if on else "crosshair")
+        except tk.TclError:
+            pass
 
     def _show_toolbar(self, x1, y1, x2, y2):
-        """在选区下方画 ✓ / ✕ 圆钮，停留等用户确认。"""
+        """在选区下方画「保存 / 取消」按钮 + 键盘提示，停留等用户确认。"""
         self._clear_toolbar()
         self._pending_bbox = self._bbox(x1, y1, x2, y2)
         left, top = min(x1, x2), min(y1, y2)
         right, bottom = max(x1, x2), max(y1, y2)
 
-        r, gap = 16, 10
-        panel_w = r * 4 + gap * 2 + 78
-        panel_h = r * 2 + 18
-        px = right - panel_w
-        py = bottom + 12
-        if py + panel_h > self._sh - 8:      # 下方放不下就放到选区上方
-            py = top - panel_h - 12
-        px = max(8, min(px, self._sw - panel_w - 8))
-        py = max(8, min(py, self._sh - panel_h - 8))
+        pad = self._px(8)
+        btn_h = self._px(40)
+        btn_pad = self._px(15)
+        gap = self._px(12)
+        hint_gap = self._px(16)
+        save_text = "✓  保存"
+        cancel_text = "✕  取消"
+        hint = "Enter 确认 · Esc 取消"
+        w_save = self._f_btn.measure(save_text) + btn_pad * 2
+        w_cancel = self._f_btn.measure(cancel_text) + btn_pad * 2
+        w_hint = self._f_hint.measure(hint)
+        panel_w = pad * 2 + w_save + gap + w_cancel + hint_gap + w_hint
+        panel_h = btn_h + pad * 2
+
+        # 水平居中在选区下方（放不下就放上方），并夹在屏幕内
+        px = left + (right - left - panel_w) // 2
+        py = bottom + self._px(12)
+        if py + panel_h > self._sh - self._px(8):
+            py = top - panel_h - self._px(12)
+        px = max(self._px(8), min(px, self._sw - panel_w - self._px(8)))
+        py = max(self._px(8), min(py, self._sh - panel_h - self._px(8)))
 
         self._toolbar.append(_rounded_rect(
-            self.canvas, px, py, px + panel_w, py + panel_h, panel_h // 2,
+            self.canvas, px, py, px + panel_w, py + panel_h,
+            min(panel_h // 2, self._px(16)),
             fill="#1c1c1e", outline="#3a3a3e"))
-        ok_cx = px + 10 + r
-        no_cx = ok_cx + r * 2 + gap
         cy = py + panel_h / 2
-        for cx, color, glyph, tag in ((ok_cx, "#16A34A", "✓", "btn_ok"),
-                                      (no_cx, "#DC2626", "✕", "btn_no")):
-            self._toolbar.append(self.canvas.create_oval(
-                cx - r, cy - r, cx + r, cy + r, fill=color, outline="",
-                tags=(tag,)))
-            self._toolbar.append(self.canvas.create_text(
-                cx, cy, text=glyph, fill="#ffffff",
-                font=("Segoe UI", 14, "bold"), tags=(tag,)))
+        bx = px + pad
+        buttons = (("btn_ok", save_text, w_save, "#16A34A", "#15803D"),
+                   ("btn_no", cancel_text, w_cancel, "#DC2626", "#B91C1C"))
+        for tag, label, width, base, hover in buttons:
+            rect = _rounded_rect(self.canvas, bx, cy - btn_h / 2,
+                                 bx + width, cy + btn_h / 2, btn_h // 2,
+                                 fill=base, outline="", tags=(tag,))
+            text = self.canvas.create_text(bx + width / 2, cy, text=label,
+                                           fill="#ffffff", font=self._f_btn,
+                                           tags=(tag,))
+            self._toolbar.extend([rect, text])
+            self._btn_recolors[tag] = (rect, base, hover)
+            bx += width + gap
         self._toolbar.append(self.canvas.create_text(
-            no_cx + r + 10, cy, text="Enter／Esc", anchor="w",
-            fill="#8e8e93", font=("Segoe UI", 9)))
-
-        self.canvas.tag_bind("btn_ok", "<Button-1>", lambda e: self._accept())
-        self.canvas.tag_bind("btn_no", "<Button-1>", lambda e: self.cancel())
+            bx - gap + hint_gap, cy, text=hint, anchor="w", fill="#8e8e93",
+            font=self._f_hint))
         self.top.focus_force()               # 拖完就能直接回车确认
 
     def _accept(self):

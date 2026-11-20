@@ -9,7 +9,7 @@
 import os
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image
 
 from . import paths
 
@@ -22,7 +22,6 @@ ACCENT = ("#6C5CE7", "#7D6CF0")           # 主强调
 ACCENT_HOVER = ("#5A4BD1", "#8E7FF5")     # 强调悬停
 ACCENT_TEXT = "#FFFFFF"
 
-SUCCESS = ("#16A34A", "#34D399")
 DANGER = ("#DC2626", "#F87171")
 
 # 语义中性色（用于文字 / 边框 / 分隔）：以 (light, dark) 给 CTk 控件
@@ -66,6 +65,7 @@ def apply_theme(theme: str = "system") -> str:
     """
     mode = _MODE_MAP.get(theme, "system")
     ctk.set_appearance_mode(mode)
+    _prune_listeners()
     for fn in list(_listeners):
         try:
             fn()
@@ -87,11 +87,19 @@ def on_theme_change(fn) -> None:
         _listeners.append(fn)
 
 
-def off_theme_change(fn) -> None:
-    try:
-        _listeners.remove(fn)
-    except ValueError:
-        pass
+def _prune_listeners() -> None:
+    """丢掉已销毁窗口的回调：每开一次结果/历史窗口都会注册新的绑定方法，
+    不清理会无限累积（切主题时逐个调用已销毁窗口的回调）。"""
+    alive = []
+    for fn in _listeners:
+        owner = getattr(fn, "__self__", None)
+        try:
+            if owner is not None and not owner.winfo_exists():
+                continue
+        except Exception:  # noqa: BLE001 - owner 不是窗口，原样保留
+            pass
+        alive.append(fn)
+    _listeners[:] = alive
 
 
 
@@ -106,13 +114,9 @@ def resolve(pair):
     return pair
 
 
-def _font_family(prefer: str) -> str:
-    return prefer
-
-
 def font(size: int = 14, weight: str = "normal", mono: bool = False) -> ctk.CTkFont:
     family = "Cascadia Mono" if mono else "Segoe UI"
-    return ctk.CTkFont(family=_font_family(family), size=size, weight=weight)
+    return ctk.CTkFont(family=family, size=size, weight=weight)
 
 
 class Fonts:
@@ -148,16 +152,6 @@ def logo_image(size: int = 22):
         return None
     img = Image.open(p).convert("RGBA").resize((size, size), Image.LANCZOS)
     return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
-
-
-def photo(path: str, size):
-    """把任意图片按最长边缩放进 size 框内，返回 (tk.PhotoImage 兼容的 ImageTk, w, h)。"""
-    try:
-        img = Image.open(path)
-    except Exception:  # noqa: BLE001
-        return None, 0, 0
-    img.thumbnail((size[0], size[1]), Image.LANCZOS)
-    return ImageTk.PhotoImage(img), img.width, img.height
 
 
 def thumb_image(path: str, size):

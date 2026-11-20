@@ -103,7 +103,7 @@ class HistoryWindow(ctk.CTkToplevel):
                                   fg_color=theme.SURFACE_SOFT, height=170)
         self.thumb.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
 
-        self.detail = ctk.CTkTextbox(right, font=theme.font(13), wrap="word",
+        self.detail = ctk.CTkTextbox(right, font=self._F.label, wrap="word",
                                      corner_radius=theme.RADIUS, fg_color=theme.SURFACE,
                                      border_width=1, border_color=theme.SEPARATOR,
                                      text_color=theme.FG)

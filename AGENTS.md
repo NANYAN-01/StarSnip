@@ -34,7 +34,7 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
   跑测试仍需 `$env:PYTHONPATH="src"`（或经 venv）。
   - 单个：`.venv\Scripts\python tests\test_tablefmt.py`
   - 全量：`Get-ChildItem tests\test_*.py | % { .venv\Scripts\python $_.FullName }`
-- 离线纯逻辑：`test_png` `test_tablefmt` `test_writers` `test_history` `test_logger` `test_imgconv`。
+- 离线纯逻辑：`test_png` `test_tablefmt` `test_writers` `test_history` `test_logger` `test_imgconv` `test_model_filter` `test_single_instance` `test_autostart`。
 - 界面结构自检：`test_ui_smoke`（逐个窗口校验字段已布局、按钮回调连通、Toast 文字不越界、遮罩压暗块坐标、贴图/美化），`test_overlay` `test_toast` `test_history_ui` `test_hotkey_settings`。
 - 静态自检：`tools\_check_undefined.py` 扫 `self.xxx` 被引用但未定义/未赋值（含 `on_export=self._export_file` 这类回调传参），能抓出「启动即崩/按钮点了报错」类缺陷；元组拆包赋值（`self.a, self.b = ...`）会误报，需人工确认。
 - `test_capture`/`test_clipboard` 走 GDI/剪贴板，不弹窗；剪贴板偶发 `clipboard busy` 属外部占用，运行时有 try/except 兜底，非缺陷。
@@ -59,12 +59,14 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
   - CTk 控件用 **(light,dark) 二元组** 颜色：`ACCENT/ACCENT_HOVER/DANGER/SURFACE/SURFACE_SOFT/SEPARATOR/FG/FG_SECONDARY/SEL`（CTk 随外观模式自动切换）。
   - 给内部 `tk.Text`/Canvas/ttk 用**字典**色板 `TEXT_BG/TEXT_FG/TEXT_BG_SOFT/SEL_BG`，用 `theme._mode_key()` 取当前实色，或用 `theme.resolve((l,d))` 把二元组降为单色。
   - **字体必须在使用时建**（根窗口已存在后）：各窗口 `__init__` 里 `self._F = theme.Fonts()`，用 `self._F.title/body/label/small/mono/mono_big`。**切勿在模块导入期创建 `CTkFont`**（无默认 root 会 `RuntimeError: Too early to use font`）。
-  - 图标经 `theme.icon_ico()/icon_png()/logo_image()/photo()`，路径由 `paths.app_root()/_MEIPASS` 解析。
+  - 图标经 `theme.icon_ico()/icon_png()/logo_image()/thumb_image()`，路径由 `paths.app_root()/_MEIPASS` 解析。
 - `ocr_core.pick_mode`：模型名含 `unlimited-ocr` 走 `/api/chat`，其余 `/api/generate`，勿写死。
-- AI 排版/翻译：`ai_writer.llm_layout` 与 `ai_writer.translate` **必须保留 `think:False`**（qwen3.5 默认思考会让排版 ~4s 变 ~65s）。翻译自动判中↔英，模型用 `translate_model or layout_model`。
+- **OCR 模型只有一个入口**：设置里只列 `ocr_core.list_ocr_models()`（`is_ocr_model` = 名字含 ocr + 支持 vision，`/api/tags` 无 capabilities 时只看名字；一个 OCR 模型都没有时依次退回视觉模型 / 全部）。排版/翻译模型固定用 `layout_model`，界面不提供选择；主 OCR 只用 `default_model` 单模型，多模型只保留结果窗口里按需的「校验双模型」。
+- **表格识别**：模型对表格可能给 Markdown 管道表，也可能给 `<tr><td>` HTML 片段（glm-ocr 常见，甚至没有 `<table>` 包裹）。`ocr_core.clean_grounding()` 先用 `tablefmt.html_to_markdown()` 统一成 Markdown；`tablefmt.parse_table()` 同时认 Markdown / HTML / 空格对齐，跨行合并单元格当标题、多表不同列宽取第一张。导出时 `ai_writer.export` 用 `tablefmt.structured_table()` 判定：已结构化就本地生成、**不调模型**（避免改数字/并错列）；只有散文才走 AI 排版。表格视图重识别只发起一次（`ResultWindow._table_requested = bool(prefer_table)`），否则解析失败会无限重识别。
+- AI 排版/翻译：`ai_writer.llm_layout` 与 `ai_writer.translate` **必须保留 `think:False`**（qwen3.5 默认思考会让排版 ~4s 变 ~65s）。翻译自动判中↔英，模型用 `translate_model or layout_model`；导出走 `App._export_file` → `ai_writer.export`（后台线程 + event 回主线程，排版失败回退原文）。
 - 新功能模块：`pin.py`（贴图，tk+PIL 帧）、`beautify.py`（圆角/阴影/留白分享图，Pillow）、`imgconv.py`（截图↔Pillow，raw `BGRX`/`BGRX` 编解码）、`settings_ui.py`（设置中心）。
-- 结果窗口导出映射：docx/txt/xlsx/md → `on_export`；png → `on_beautify`。`_translate` 在「译文」与原文间切换（依赖 `ResultWindow._orig_text/_trans_text/_showing_translation`）。
-- 配置：`config.load()` 用 `DEFAULTS` 合并根 `config.json`；改单项用 `config.save_setting`（保留其它键）。新增键：`theme/translate_model/pin_alpha/beautify_bg/beautify_pad_ratio/auto_ocr`（DEFAULTS 与 config.json 都要有）。`sys.frozen` 时配置在 exe 同目录。
+- 结果窗口导出映射：docx/txt/xlsx/md → `on_export`（已解析出表格时本地直出，普通文本才先 AI 排版）；png → `on_beautify`。`_translate` 在「译文」与原文间切换（依赖 `ResultWindow._orig_text/_trans_text/_showing_translation`）。
+- 配置：`config.load()` 用 `DEFAULTS` 合并根 `config.json`；改单项用 `config.save_setting`（保留其它键）。新增键：`theme/translate_model/pin_alpha/beautify_bg/beautify_pad_ratio/beautify_radius_ratio/save_image`（DEFAULTS 与 config.json 都要有）。提示词 `prompt/table_prompt` 的默认值单源在 `ocr_core` 常量（config.DEFAULTS 引用它），config.json 里可覆盖。已删键：`auto_ocr`（两热键分工替代）、`joint_enabled/joint_models`（与「校验双模型」重复，保留 `verify_models`）。`sys.frozen` 时配置在 exe 同目录。
 - **隐私铁律**：仓库里的 `config.json` 只放占位值（`ollama_url` 为 `http://127.0.0.1:11434`）。真实内网地址/个人路径写 `config.local.json`（已 gitignore，与 `config.json` 同目录，加载时覆盖它；`save_setting` 也会写它）。**任何提交前先 `git grep -n 172.16` 自查，禁止把内网 IP、主机名、机构信息写进受版本控制的文件。**
 - 路径集中在 `paths.py`：数据目录 `%APPDATA%\StarSnip`（`STARSNIP_HOME`，兼容旧 `SCREENOCR_HOME`；新目录不存在且旧 `ScreenOCR` 目录存在时沿用旧目录，保历史）；日志 `starsnip.log`；截图 `图片\StarSnip`；导出 `文档\StarSnip`。
 - 环境变量：`OLLAMA_URL`、`OLLAMA_MODEL`、`STARSNIP_HOME`。
@@ -74,6 +76,8 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
 - 源码/文档/UI 文案均中文 UTF-8。GBK 控制台报 `UnicodeEncodeError` 设 `PYTHONIOENCODING=utf-8`。
 - 无 lint/formatter/typecheck/CI；风格：4 空格、`%` 格式化、有意兜底异常标 `# noqa: BLE001`。
 - MCP 需 `mcp<2`，按需导入。应用 MCP 是 `src/starsnip/mcp_server.py`；`ocr/` 目录是早期 PRD/压测/另一旧 MCP，非运行时。
-- 同一用户不能同时跑两个实例（全局热键冲突）。
+- **开机启动**：`autostart.py` 用任务计划程序（任务名 `StarSnip`，`LogonTrigger` + `InteractiveToken` + `LeastPrivilege`）。非提权时用 `ShellExecuteExW("runas")` 提权跑 schtasks（UAC）；取消返回 1223，设置里红字回滚。源码模式任务动作是 `pythonw.exe -m starsnip`、工作目录 `src`（`-m` 会把 cwd 加进 sys.path）；打包版直接跑 exe。任务 XML 写成 UTF-16 临时文件再 `schtasks /Create /XML`。
+- **单实例**：常驻模式（无 `--history/--settings/--file`）启动前抢 `single_instance` 命名互斥体（`Local\StarSnip.SingleInstance`）；已有实例时广播 `StarSnip.Activate`，托盘 WndProc 转成 `{"type":"activate"}` 事件 → Toast「已在运行」，新进程记日志后退出。`--file/--history/--settings/--mcp/--check` 不抢锁（不注册热键，可并发）。互斥体随进程退出释放，没有锁文件；改这块注意不要用端口/防火墙。
 - **两个全局热键**：`hotkey`（默认 `ctrl+2`，截图+识别）与 `hotkey_capture_only`（默认 `ctrl+1`，仅截图）。`App._start_hotkey` 各起一个 `HotkeyManager`（独立线程，热键 id 互不冲突）；仅截图走 `SelectionOverlay(confirm=True)`，拖完停留、点 ✓/回车才交付。改热键用 `_apply_hotkey(spec, "ocr"|"capture")`。
+- **托盘菜单不重复设置入口**：快捷键只在设置窗口改（`App._open_hotkey_dialog` 复用同一个 `HotkeyDialog`），托盘不再有「设置快捷键…」；`hotkey_dialog` 由 App 持有，避免叠出多个对话框。
 - 品牌：中文「星剪」，英文/代码名「StarSnip」，包名 `starsnip`。`docs/开发计划.md`、`docs/工作日志.md` 含历史 `D:\030\screenocr` 路径，与代码冲突时以代码/README 为准。

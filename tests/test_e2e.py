@@ -70,8 +70,11 @@ def main():
                     return finish("export file missing")
                 with zipfile.ZipFile(path) as z:
                     assert z.testzip() is None
+                    doc = z.read("word/document.xml").decode("utf-8")
+                # 表格内容已在本地解析出来，导出必须带真表格且数字不被改写
+                assert "<w:tbl>" in doc and "34615.50" in doc, doc[:500]
                 print("export OK:", os.path.basename(path),
-                      os.path.getsize(path), "bytes")
+                      os.path.getsize(path), "bytes, table preserved")
                 return finish(None)
         if time.time() > deadline:
             return finish("timeout at stage %s" % state["stage"])
