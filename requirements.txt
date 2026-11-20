@@ -1,0 +1,9 @@
+# 星剪 StarSnip 运行/打包依赖
+# 界面
+customtkinter>=5.2
+Pillow>=10
+# 打包（可选，源码运行无需）
+pyinstaller>=6
+
+# MCP 服务（可选，仅 --mcp 需要）：
+# mcp<2

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 构建产物（可重新生成，不入库）
+build/
+dist/
+*.spec.bak
+
+# 运行期数据 / 日志
+*.log
+screenocr.log
+starsnip.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# 打包图标中间产物
+tools/_icon_tmp/
+
+# 调试截图 / UI 探针产物
+tools/_shots/
+fixtures/_capture_*.png
+
+# 旧实验/压测目录（含内网主机信息，不公开）
+ocr/
