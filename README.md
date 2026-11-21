@@ -23,21 +23,19 @@ Word / TXT / XLSX / Markdown。
 
 模型接入支持**本地 Ollama 与云端 OpenAI 兼容服务**：OCR、主 LLM（翻译）、排版布局三个角色可以各选各的厂商，互不绑定。
 
-| 厂商 | 预置 BaseURL | 说明 |
-|---|---|---|
-| Ollama（本地） | `http://127.0.0.1:11434` | 免 Key；OCR 建议 `glm-ocr` |
-| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` / `deepseek-reasoner` |
-| Kimi（Moonshot） | `https://api.moonshot.cn/v1` | OpenAI 兼容 |
-| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 视觉模型如 `qwen-vl-max` |
-| 腾讯 TokenHub | `https://tokenhub.tencentmaas.com/v1` | 模型名按模型广场填 |
-| 火山方舟 | `https://ark.cn-beijing.volces.com/api/v3` | 模型名或接入点 `ep-xxx` |
-| 自定义 API | 自己填 | BaseURL / 鉴权头 / 模型名全开放 |
+| 厂商             | 预置 BaseURL                                        | 说明                                  |
+| ---------------- | --------------------------------------------------- | ------------------------------------- |
+| Ollama（本地）   | `http://127.0.0.1:11434`                            | 免 Key；OCR 建议 `glm-ocr`            |
+| DeepSeek         | `https://api.deepseek.com`                          | `deepseek-chat` / `deepseek-reasoner` |
+| Kimi（Moonshot） | `https://api.moonshot.cn/v1`                        | OpenAI 兼容                           |
+| 阿里云百炼       | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 视觉模型如 `qwen-vl-max`              |
+| 腾讯 TokenHub    | `https://tokenhub.tencentmaas.com/v1`               | 模型名按模型广场填                    |
+| 火山方舟         | `https://ark.cn-beijing.volces.com/api/v3`          | 模型名或接入点 `ep-xxx`               |
+| 自定义 API       | 自己填                                              | BaseURL / 鉴权头 / 模型名全开放       |
 
 选中厂商会自动填 BaseURL（仍可改成其他地域或代理）；API Key 只写在本机 `config.local.json`，不会进仓库。
 
 默认两个热键：**`Ctrl+2` 截图并识别**；**`Ctrl+1` 只截图**（拖完停留，点 ✓ 才保存/进剪贴板，点 ✕ 放弃）。两个热键都能在设置里改。
-
-> 本项目由早期的个人工具 ScreenOCR 全面改版而来：重命名、UI 重写、新增功能、统一设计系统。
 
 ## 下载与更新
 
@@ -49,12 +47,12 @@ Word / TXT / XLSX / Markdown。
 
 ## 界面预览
 
-| 识别结果（深色） | 表格视图（浅色） |
-|---|---|
+| 识别结果（深色）                                      | 表格视图（浅色）                                         |
+| ----------------------------------------------------- | -------------------------------------------------------- |
 | ![result-text](docs/screenshots/result-text-dark.png) | ![result-table](docs/screenshots/result-table-light.png) |
 
-| 交叉校验 | 历史记录 | 设置中心 |
-|---|---|---|
+| 交叉校验                                    | 历史记录                                      | 设置中心                                        |
+| ------------------------------------------- | --------------------------------------------- | ----------------------------------------------- |
 | ![verify](docs/screenshots/verify-dark.png) | ![history](docs/screenshots/history-dark.png) | ![settings](docs/screenshots/settings-dark.png) |
 
 ## 主要功能
@@ -122,27 +120,27 @@ tools\build_exe.bat        :: 产出 dist\StarSnip.exe，并复制 config.json �
 
 ## 配置（`config.json`，位于 exe 同目录或仓库根）
 
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `ollama_url` | `http://127.0.0.1:11434` | Ollama 后端地址（真实内网地址建议放 `config.local.json`，避免提交进仓库） |
-| `default_model` | `glm-ocr:latest` | OCR 识别模型 |
-| `layout_model` | `qwen3.5:4b` | AI 排版 / 翻译用的默认模型（强制 `think:false`；界面不提供选择，改这里即可换模型） |
-| `theme` | `system` | 界面主题：`system`/`light`/`dark` |
-| `hotkey` | `ctrl+2` | 全局热键：截图并 OCR 识别 |
-| `hotkey_capture_only` | `ctrl+1` | 全局热键：仅截图（拖完停留，✓ 保存 / ✕ 放弃） |
-| `verify_models` | glm-ocr + unlimited-ocr | 交叉校验的对照模型；主模型始终是当前 OCR 模型，同名项自动跳过 |
-| `max_side_px` | `1280` | 送识别长边上限 |
-| `timeout_s` / `layout_timeout` | 60 / 120 | 识别 / 排版超时 |
-| `keep_alive` | `30m` | Ollama 模型保活 |
-| `save_image` / `image_dir` | `true` / `""` | 截图保存与目录（空=`图片\StarSnip`） |
-| `clipboard_image` | `true` | 截图写入系统剪贴板 |
-| `toast_ms` | `2000` | 轻提示停留毫秒 |
-| `export_dir` | `""` | 导出目录（空=`文档\StarSnip`） |
-| `pin_alpha` | `1.0` | 贴图默认不透明度 |
-| `beautify_bg` / `beautify_pad_ratio` / `beautify_radius_ratio` | `white` / `0.08` / `0.025` | 美化分享图背景、留白比例与圆角比例 |
-| `translate_model` | `""`（回退 `layout_model`） | 翻译专用模型（可选，仅配置文件） |
-| `history_enabled` / `history_keep` | `true` / `500` | 历史开关与保留条数 |
-| `prompt` / `table_prompt` | 见 `ocr_core.py` | OCR / 表格提示词（默认值单源在常量，config 中可覆盖） |
+| 字段                                                           | 默认                        | 说明                                                                               |
+| -------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------- |
+| `ollama_url`                                                   | `http://127.0.0.1:11434`    | Ollama 后端地址（真实内网地址建议放 `config.local.json`，避免提交进仓库）          |
+| `default_model`                                                | `glm-ocr:latest`            | OCR 识别模型                                                                       |
+| `layout_model`                                                 | `qwen3.5:4b`                | AI 排版 / 翻译用的默认模型（强制 `think:false`；界面不提供选择，改这里即可换模型） |
+| `theme`                                                        | `system`                    | 界面主题：`system`/`light`/`dark`                                                  |
+| `hotkey`                                                       | `ctrl+2`                    | 全局热键：截图并 OCR 识别                                                          |
+| `hotkey_capture_only`                                          | `ctrl+1`                    | 全局热键：仅截图（拖完停留，✓ 保存 / ✕ 放弃）                                      |
+| `verify_models`                                                | glm-ocr + unlimited-ocr     | 交叉校验的对照模型；主模型始终是当前 OCR 模型，同名项自动跳过                      |
+| `max_side_px`                                                  | `1280`                      | 送识别长边上限                                                                     |
+| `timeout_s` / `layout_timeout`                                 | 60 / 120                    | 识别 / 排版超时                                                                    |
+| `keep_alive`                                                   | `30m`                       | Ollama 模型保活                                                                    |
+| `save_image` / `image_dir`                                     | `true` / `""`               | 截图保存与目录（空=`图片\StarSnip`）                                               |
+| `clipboard_image`                                              | `true`                      | 截图写入系统剪贴板                                                                 |
+| `toast_ms`                                                     | `2000`                      | 轻提示停留毫秒                                                                     |
+| `export_dir`                                                   | `""`                        | 导出目录（空=`文档\StarSnip`）                                                     |
+| `pin_alpha`                                                    | `1.0`                       | 贴图默认不透明度                                                                   |
+| `beautify_bg` / `beautify_pad_ratio` / `beautify_radius_ratio` | `white` / `0.08` / `0.025`  | 美化分享图背景、留白比例与圆角比例                                                 |
+| `translate_model`                                              | `""`（回退 `layout_model`） | 翻译专用模型（可选，仅配置文件）                                                   |
+| `history_enabled` / `history_keep`                             | `true` / `500`              | 历史开关与保留条数                                                                 |
+| `prompt` / `table_prompt`                                      | 见 `ocr_core.py`            | OCR / 表格提示词（默认值单源在常量，config 中可覆盖）                              |
 
 环境变量：`OLLAMA_URL`、`OLLAMA_MODEL`、`STARSNIP_HOME`（兼容旧 `SCREENOCR_HOME`）。
 
@@ -202,5 +200,4 @@ SnapPin、XPin、SnowAir、Imago、macshot、mark-shot、Umi-OCR 等（贴图、
 
 ## 许可
 
-本工具由个人项目 ScreenOCR 改版而来，作者为 NANYAN-01。如需以特定开源协议发布，
-可在仓库根添加 `LICENSE` 文件。OCR 数据层中用于兼容的字段键名沿用上游约定。
+MIT
