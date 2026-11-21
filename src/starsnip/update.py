@@ -108,7 +108,7 @@ def check(cfg: dict = None, timeout: float = TIMEOUT_S) -> dict:
     errors = []
     for name, url in sources:
         try:
-            raw = _fetch(url, timeout)
+            raw = _fetch(url, timeout).lstrip(b"\xef\xbb\xbf")
             data = json.loads(raw.decode("utf-8", "replace"))
             info = _release(data) if name == "github" else _manifest(data)
         except urllib.error.HTTPError as exc:

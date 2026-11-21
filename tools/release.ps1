@@ -46,8 +46,14 @@ $vj.version = $ver
 $vj.url = "https://github.com/NANYAN-01/StarSnip/releases/tag/$tag"
 $vj.assets.exe = $url
 $vj.assets.sha256 = $hash
-($vj | ConvertTo-Json -Depth 5) | Set-Content -Encoding utf8 "version.json"
-Write-Host "   已回填 version.json（下载地址 + sha256）"
+# 写 UTF-8 无 BOM（Windows PowerShell 的 -Encoding utf8 会带 BOM，
+# 那样 update.check 解析清单会失败），写完立刻回读校验
+$json = ($vj | ConvertTo-Json -Depth 5) + "`n"
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Join-Path $root "version.json"), $json, $utf8)
+$check = Get-Content "version.json" -Raw -Encoding utf8 | ConvertFrom-Json
+if ($check.version -ne $ver -or -not $check.assets.exe) { throw "version.json 写入异常" }
+Write-Host "   已回填 version.json（下载地址 + sha256，UTF-8 无 BOM）"
 
 if (-not $Push) {
     Write-Host ""
@@ -58,14 +64,25 @@ if (-not $Push) {
     return
 }
 
-git add -A
-git commit -m "release: $tag" | Out-Null
-if (-not (git tag --list $tag)) { git tag $tag }
+git add version.json StarSnip.version src/starsnip/__init__.py README.md
+if (git diff --cached --quiet) {
+    Write-Host "   版本文件无变化，跳过提交"
+} else {
+    git commit -m "release: $tag" | Out-Null
+}
+if (-not (git tag --list $tag)) { git tag -a $tag -m "星剪 $ver" }
 git push
 git push --tags
-if (Get-Command gh -ErrorAction SilentlyContinue) {
-    gh release create $tag "dist\StarSnip.exe" "dist\SHA256SUMS.txt" --title "星剪 $ver" --generate-notes
-    Write-Host "Release 已创建：https://github.com/NANYAN-01/StarSnip/releases/tag/$tag"
-} else {
-    Write-Host "未安装 gh：请手动把 dist\StarSnip.exe 上传到 Release $tag" -ForegroundColor Yellow
+
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    Write-Host "未安装 gh：tag 已推，请手动把 dist\StarSnip.exe 上传到 Release $tag" -ForegroundColor Yellow
+    return
 }
+# 只上传 exe 和校验文件：dist\config.local.json 含本机内网信息，绝不上传
+if (gh release view $tag 2>$null) {
+    gh release upload $tag "dist\StarSnip.exe" "dist\SHA256SUMS.txt" --clobber
+} else {
+    gh release create $tag "dist\StarSnip.exe" "dist\SHA256SUMS.txt" --title "星剪 $ver" --generate-notes
+}
+gh release view $tag --json url,assets --jq '"Release: " + .url + "  资产 " + ([.assets[].name] | join(", "))'
+Write-Host "   发布完成（tag $tag + Release 资产）" -ForegroundColor Green
