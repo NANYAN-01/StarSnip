@@ -1,4 +1,4 @@
-# 星剪 StarSnip 发版脚本
+﻿# 星剪 StarSnip 发版脚本
 #
 #   .\tools\release.ps1                      # 用当前版本号打包，不推送
 #   .\tools\release.ps1 -Version 1.2.0       # 先同步版本号再打包
