@@ -34,7 +34,8 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
   跑测试仍需 `$env:PYTHONPATH="src"`（或经 venv）。
   - 单个：`.venv\Scripts\python tests\test_tablefmt.py`
   - 全量：`Get-ChildItem tests\test_*.py | % { .venv\Scripts\python $_.FullName }`
-- 离线纯逻辑：`test_png` `test_tablefmt` `test_writers` `test_history` `test_logger` `test_imgconv` `test_model_filter` `test_single_instance` `test_autostart`。
+- 离线纯逻辑：`test_png` `test_tablefmt` `test_writers` `test_history` `test_logger` `test_imgconv` `test_model_filter` `test_single_instance` `test_autostart` `test_update` `test_startup`。
+  - `test_startup` 只做只读校验（**绝不在测试里写 HKCU Run**，否则会改到跑测试的人自己的登录启动项）；真机验证用 `startup.enable/disable` 手动跑一遍。
 - 界面结构自检：`test_ui_smoke`（逐个窗口校验字段已布局、按钮回调连通、Toast 文字不越界、遮罩压暗块坐标、贴图/美化），`test_overlay` `test_toast` `test_history_ui` `test_hotkey_settings`。
 - 静态自检：`tools\_check_undefined.py` 扫 `self.xxx` 被引用但未定义/未赋值（含 `on_export=self._export_file` 这类回调传参），能抓出「启动即崩/按钮点了报错」类缺陷；元组拆包赋值（`self.a, self.b = ...`）会误报，需人工确认。
 - `test_capture`/`test_clipboard` 走 GDI/剪贴板，不弹窗；剪贴板偶发 `clipboard busy` 属外部占用，运行时有 try/except 兜底，非缺陷。
@@ -60,11 +61,32 @@ $env:PYTHONPATH="src"; $env:PYTHONIOENCODING="utf-8"
   - 给内部 `tk.Text`/Canvas/ttk 用**字典**色板 `TEXT_BG/TEXT_FG/TEXT_BG_SOFT/SEL_BG`，用 `theme._mode_key()` 取当前实色，或用 `theme.resolve((l,d))` 把二元组降为单色。
   - **字体必须在使用时建**（根窗口已存在后）：各窗口 `__init__` 里 `self._F = theme.Fonts()`，用 `self._F.title/body/label/small/mono/mono_big`。**切勿在模块导入期创建 `CTkFont`**（无默认 root 会 `RuntimeError: Too early to use font`）。
   - 图标经 `theme.icon_ico()/icon_png()/logo_image()/thumb_image()`，路径由 `paths.app_root()/_MEIPASS` 解析。
+- **设置中心版式（DeskBox 风格，2026-11 改版）**：`settings_ui.py` 是「214px 左导航轨 + 右内容列」两栏，
+  五个分页（常规 / 快捷与交互 / 识别与后端 / 存储与导出 / 关于）都挂在同一个 `CTkScrollableFrame` 里，
+  切页只 pack/forget 页面帧；每个设置项是一张 `_SettingsRow`（最小 64px 高、radius 6、1px 描边、
+  20px 图标 + 14px 标题 + 12px 描述、控件右对齐），卡片之间用 4px 缝而不是分割线。
+  令牌在 `theme.py`：`BG / CARD_STROKE / INPUT_BG / NAV_SEL / ROW_GAP / ROW_H / NAV_W / RADIUS_CARD`，
+  字阶 `Fonts.display/section/card/desc/caption/glyph`（Tk 只认 normal|bold，没有真半粗）。
+  - 布尔项用自绘 `_Toggle`（40×20 胶囊、滑块内嵌 2px）：CTkSwitch 的滑块骑在轨道右端有一半露在外面，
+    浅色下白滑块和白卡片糊成一片，看起来像轨道被咬掉一块。
+  - 图标一律 Segoe Fluent Icons 字形（`theme.glyph_font()`，Win11 回落 Win10 的 MDL2），不打包图标资源。
+  - **空 CTkFrame 默认请求 200×200**：没有控件的「控件槽」放进 grid 会把整行撑到 200 高，必须显式给 `width=1, height=1`。
+  - **CTkEntry 的 `insert("")` 会撤销占位文字且不再恢复**：值为空时不要调 insert，占位文字才会显示。
+  - 内容不超出视口时 `_sync_scrollbar()` 会收起滚动条（WinUI 的做法），别把它当成「滚动条消失」的 bug。
 - `ocr_core.pick_mode`：模型名含 `unlimited-ocr` 走 `/api/chat`，其余 `/api/generate`，勿写死。
-- **OCR 模型只有一个入口**：设置里只列 `ocr_core.list_ocr_models()`（`is_ocr_model` = 名字含 ocr + 支持 vision，`/api/tags` 无 capabilities 时只看名字；一个 OCR 模型都没有时依次退回视觉模型 / 全部）。排版/翻译模型固定用 `layout_model`，界面不提供选择；主 OCR 只用 `default_model` 单模型，多模型只保留结果窗口里按需的「校验双模型」。
+- **OCR 候选模型**：设置「模型接入」里按当前角色拉列表——Ollama 走 `ocr_core.list_ocr_models()`（`is_ocr_model` = 名字含 ocr + 支持 vision，`/api/tags` 无 capabilities 时只看名字；没有 OCR 模型时依次退回视觉模型 / 全部），云端走 `GET {base_url}/models`（不过滤，按需选）。交叉校验仍用「当前 OCR 模型 + `verify_models` 里一个不同模型」。
 - **表格识别**：模型对表格可能给 Markdown 管道表，也可能给 `<tr><td>` HTML 片段（glm-ocr 常见，甚至没有 `<table>` 包裹）。`ocr_core.clean_grounding()` 先用 `tablefmt.html_to_markdown()` 统一成 Markdown；`tablefmt.parse_table()` 同时认 Markdown / HTML / 空格对齐，跨行合并单元格当标题、多表不同列宽取第一张。导出时 `ai_writer.export` 用 `tablefmt.structured_table()` 判定：已结构化就本地生成、**不调模型**（避免改数字/并错列）；只有散文才走 AI 排版。表格视图重识别只发起一次（`ResultWindow._table_requested = bool(prefer_table)`），否则解析失败会无限重识别。
-- AI 排版/翻译：`ai_writer.llm_layout` 与 `ai_writer.translate` **必须保留 `think:False`**（qwen3.5 默认思考会让排版 ~4s 变 ~65s）。翻译自动判中↔英，模型用 `translate_model or layout_model`；导出走 `App._export_file` → `ai_writer.export`（后台线程 + event 回主线程，排版失败回退原文）。
-- 新功能模块：`pin.py`（贴图，tk+PIL 帧）、`beautify.py`（圆角/阴影/留白分享图，Pillow）、`imgconv.py`（截图↔Pillow，raw `BGRX`/`BGRX` 编解码）、`settings_ui.py`（设置中心）。
+- AI 排版/翻译：`ai_writer.llm_layout` / `translate` 都收 `profile`（缺省时把旧 `model/url` 参数当 Ollama 角色，兼容旧调用与测试）；Ollama 分支**必须保留 `think:False`**（qwen3.5 默认思考会让排版 ~4s 变 ~65s）。翻译自动判中↔英，用「主 LLM」角色（没配模型时退回排版角色）；导出走 `App._export_file` → `ai_writer.export`（后台线程 + event 回主线程，排版失败回退原文）。
+- 新功能模块：`pin.py`（贴图，tk+PIL 帧）、`beautify.py`（圆角/阴影/留白分享图，Pillow）、`imgconv.py`（截图↔Pillow，raw `BGRX`/`BGRX` 编解码）、`settings_ui.py`（设置中心）、`startup.py`（开机启动三机制）、`update.py`（版本检查与自动更新）、`providers.py`（预置厂商）、`llm.py`（统一模型调用层）。
+- **三模型接入（2026-11）**：`cfg["models"]` 是唯一事实源，三个角色 `main/ocr/layout` **各自独立**配 provider / base_url / api_key / model / timeout / stream / auth_header / auth_prefix。`config.normalize_models()` 把只有 `ollama_url/default_model/layout_model` 的老配置迁移成三个 Ollama profile；`config.model_profile(cfg, role)` 取某角色。
+  - 云端一律走 OpenAI 兼容 `POST {base_url}/chat/completions`（`llm.chat`，支持 SSE 流式）；Ollama 继续走原生 `/api/generate`、`/api/chat`（`llm.generate` 内部按 provider 分支，OCR 的 unlimited-ocr 仍走 chat 模式）。
+  - 预置厂商 BaseURL 在 `providers.PROVIDERS`（下拉顺序即列表顺序，最后一项是「自定义 API」）；选厂商自动填 BaseURL，输入框始终可编辑。阿里百炼预置的是标准 `dashscope.aliyuncs.com/compatible-mode/v1`，`llm-xxx.maas.aliyuncs.com` 属于专属部署，走自定义。
+  - **API Key 只写 config.local.json**（`config.save_models`，同时同步 `default_model/layout_model/translate_model` 旧键），绝不进受版本控制的 config.json。
+  - 界面按厂商降噪：**鉴权头 / 流式只在「自定义 API」显示**，Ollama 连 API Key 行都隐藏（内网无鉴权也一样）；预置厂商一律标准 Bearer + 非流式，普通用户不用理解这两项。
+  - **自测工具** `tools/probe_providers.py`：读你的 API 表格（序号/归属/名称/服务商/Base URL/API Key/包含模型），逐条跑一次 chat 并打码输出；`--vision` 额外发一张带文字的图片验证 OCR 角色。需要 openpyxl（只有这个工具要）。Ollama 走 11434 端口时工具会自动补 `/v1` 重试——**自定义 API 填 Ollama 必须带 /v1**，选「Ollama（本地）」预设改地址则走原生接口、不用 /v1。
+  - OCR 云端需要支持图片输入的模型（`image_url` data URL）；本地视觉模型不受影响。
+- **开机启动（2026-11 重做）**：`startup.py` 默认写 **HKCU\...\Run**（免 UAC、在「设置→应用→启动」和任务管理器里可见），被组策略 `DisableCurrentUserRun` 拦住时回落 **启动文件夹 .lnk**；`autostart.py` 的计划任务只作为「高级：需管理员/延迟启动」保留。**源码模式必须走启动文件夹**（Run 键没有工作目录，`-m starsnip` 会找不到包）。状态判断要同时看 StartupApproved（12 字节，`02`/`04`＝启用，`03+FILETIME`＝被关掉），只看键是否存在会误报；`startup.enable()` 会在写完后自动修回 `02`。登录启动带 `--startup`，`__main__` 里延迟 1.2s 再挂热键/托盘。
+- **版本与更新**：版本号单源 `__init__.__version__`，发版用 `tools/set_version.py X.Y.Z` 同步到 `version.json` 与 `StarSnip.version`（exe 属性页），再跑 `tools/release.ps1`（打包 + SHA256 + 回填下载地址，`-Push` 才提交/打 tag/建 Release）。更新检查三源：`update_url`（config.local.json 自填）→ GitHub Releases API → raw `version.json`；24h 缓存（`%APPDATA%\StarSnip\update.json`）。自动更新流程：静默检查 → 后台下载 → 校验 SHA256 → **退出时**用 `MoveFileExW` 把 exe 改成 `.old`、放新的、再用临时 .cmd 等 2 秒重启（不能直接 Popen：单实例互斥体还没释放）。`update_auto=false` 时只提示不下载。
 - 结果窗口导出映射：docx/txt/xlsx/md → `on_export`（已解析出表格时本地直出，普通文本才先 AI 排版）；png → `on_beautify`。`_translate` 在「译文」与原文间切换（依赖 `ResultWindow._orig_text/_trans_text/_showing_translation`）。
 - 配置：`config.load()` 用 `DEFAULTS` 合并根 `config.json`；改单项用 `config.save_setting`（保留其它键）。新增键：`theme/translate_model/pin_alpha/beautify_bg/beautify_pad_ratio/beautify_radius_ratio/save_image`（DEFAULTS 与 config.json 都要有）。提示词 `prompt/table_prompt` 的默认值单源在 `ocr_core` 常量（config.DEFAULTS 引用它），config.json 里可覆盖。已删键：`auto_ocr`（两热键分工替代）、`joint_enabled/joint_models`（与「校验双模型」重复，保留 `verify_models`）。`sys.frozen` 时配置在 exe 同目录。
 - **隐私铁律**：仓库里的 `config.json` 只放占位值（`ollama_url` 为 `http://127.0.0.1:11434`）。真实内网地址/个人路径写 `config.local.json`（已 gitignore，与 `config.json` 同目录，加载时覆盖它；`save_setting` 也会写它）。**任何提交前先 `git grep -n 172.16` 自查，禁止把内网 IP、主机名、机构信息写进受版本控制的文件。**

@@ -1,9 +1,6 @@
 """AI layout: general LLM turns OCR text into Markdown, then export to docx/xlsx/txt/md."""
 
-import json
-import urllib.request
-
-from . import mdblocks, screenfiles, tablefmt
+from . import llm, mdblocks, screenfiles, tablefmt
 from .writers import docx as docx_writer
 from .writers import xlsx as xlsx_writer
 
@@ -18,36 +15,34 @@ LAYOUT_PROMPT = (
 FORMATS = ("docx", "txt", "xlsx", "md")
 
 
-def llm_layout(text: str, model: str, url: str, timeout: float = 120.0,
-               keep_alive: str = "30m") -> str:
-    payload = {
-        "model": model,
-        "prompt": LAYOUT_PROMPT + (text or ""),
-        "stream": False,
-        # explicit think:false is ~16x faster on qwen3.5 (65s -> 4s)
-        "think": False,
-        "keep_alive": keep_alive,
-        "options": {"temperature": 0.1, "num_predict": 4096},
-    }
-    req = urllib.request.Request(
-        url.rstrip("/") + "/api/generate",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json; charset=utf-8"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    if data.get("error"):
-        raise RuntimeError(data["error"])
-    md = (data.get("response") or "").strip()
+def _resolve(model: str = None, url: str = None, profile: dict = None) -> dict:
+    """老调用方只给 (model, url)：当成 Ollama 角色；新调用方直接给 profile。"""
+    if isinstance(profile, dict) and profile:
+        return profile
+    return {"provider": "ollama", "base_url": url or "http://127.0.0.1:11434",
+            "api_key": "", "model": model or "", "timeout": 120,
+            "stream": False}
+
+
+def llm_layout(text: str, model: str = None, url: str = None,
+               timeout: float = 120.0, keep_alive: str = "30m",
+               profile: dict = None) -> str:
+    # think=False 只对 Ollama 生效：qwen3.5 默认思考会让排版 ~4s 变 ~65s
+    md = llm.generate(_resolve(model, url, profile), LAYOUT_PROMPT + (text or ""),
+                      timeout=timeout, think=False, keep_alive=keep_alive)
+    md = (md or "").strip()
     if not md:
         raise RuntimeError("empty layout response")
     return md
 
 
-def layout_markdown(text: str, model: str, url: str, timeout: float = 120.0,
-                    keep_alive: str = "30m") -> str:
+def layout_markdown(text: str, model: str = None, url: str = None,
+                    timeout: float = 120.0, keep_alive: str = "30m",
+                    profile: dict = None) -> str:
     """Layout via LLM; falls back to the raw OCR text on any failure."""
     try:
-        return llm_layout(text, model, url, timeout, keep_alive=keep_alive)
+        return llm_layout(text, model, url, timeout, keep_alive=keep_alive,
+                          profile=profile)
     except Exception:  # noqa: BLE001
         return text
 
@@ -68,8 +63,9 @@ def blocks_to_text(blocks) -> str:
     return "\n".join(out).strip() + "\n"
 
 
-def export(text: str, fmt: str, model: str, url: str, directory: str = None,
-           timeout: float = 120.0, keep_alive: str = "30m") -> tuple:
+def export(text: str, fmt: str, model: str = None, url: str = None,
+           directory: str = None, timeout: float = 120.0,
+           keep_alive: str = "30m", profile: dict = None) -> tuple:
     """Returns (file_path, markdown_used).
 
     文本里已经有结构化表格（Markdown / HTML）时，直接按行列本地生成：
@@ -85,7 +81,8 @@ def export(text: str, fmt: str, model: str, url: str, directory: str = None,
         if not any(b["type"] == "table" for b in blocks):
             blocks.append({"type": "table", "rows": rows})
     else:
-        md = layout_markdown(text, model, url, timeout, keep_alive=keep_alive)
+        md = layout_markdown(text, model, url, timeout, keep_alive=keep_alive,
+                             profile=profile)
         blocks = mdblocks.parse_blocks(md)
     if fmt == "md":
         # 对齐列文本导 .md 时补成 Markdown 表格；本来就是 Markdown 则原样保留
@@ -116,8 +113,9 @@ def _detect_lang(text: str) -> str:
     return "zh" if _CJK_RE.search(text or "") else "en"
 
 
-def translate(text: str, model: str, url: str, target: str = "auto",
-              timeout: float = 120.0, keep_alive: str = "30m") -> tuple:
+def translate(text: str, model: str = None, url: str = None,
+              target: str = "auto", timeout: float = 120.0,
+              keep_alive: str = "30m", profile: dict = None) -> tuple:
     """翻译 OCR 文本。target: auto/en/zh。返回 (译文, 目标语言码)。"""
     src = _detect_lang(text)
     tgt = target if target in ("en", "zh") else ("en" if src == "zh" else "zh")
@@ -127,20 +125,8 @@ def translate(text: str, model: str, url: str, target: str = "auto",
         "保留原有换行、表格与列表结构，只输出译文，不要解释。\n\n---\n%s"
         % (tgt_name, text or "")
     )
-    payload = {
-        "model": model, "prompt": prompt, "stream": False, "think": False,
-        "keep_alive": keep_alive,
-        "options": {"temperature": 0.2, "num_predict": 4096},
-    }
-    req = urllib.request.Request(
-        url.rstrip("/") + "/api/generate",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json; charset=utf-8"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    if data.get("error"):
-        raise RuntimeError(data["error"])
-    out = (data.get("response") or "").strip()
+    out = llm.generate(_resolve(model, url, profile), prompt, timeout=timeout,
+                       think=False, keep_alive=keep_alive).strip()
     if not out:
         raise RuntimeError("empty translation")
     return out, tgt

@@ -69,19 +69,48 @@ def test_settings(root):
 
     scroll = find_widget(win, "CTkScrollableFrame")
     check(scroll is not None, "设置窗口有可滚动内容区")
-    fields = [c for c in (scroll.winfo_children() if scroll else [])
-              if type(c).__name__ == "_Field"]
-    check(len(fields) >= 9, "字段块数量 ≥ 9（实际 %d）" % len(fields))
-    check(all(f.winfo_manager() for f in fields), "所有字段块都已布局（非空窗口）")
-    check(all(f.winfo_height() > 10 for f in fields), "字段块有实际高度")
+    # 版式改成了「左导航 + 行式设置卡」，断言从 _Field 改为 _SettingsRow
+    rows = [r for page in win._rows.values() for r in page]
+    check(len(rows) >= 14, "设置卡数量 ≥ 14（实际 %d）" % len(rows))
+    check(all(r.winfo_manager() for r in rows), "所有设置卡都已布局（非空窗口）")
+    check(all(r.winfo_height() > 10 for r in win._rows[win._active]),
+          "当前页设置卡有实际高度")
+    check(len(win._pages) == 5, "五个分页（实际 %d）" % len(win._pages))
+
+    # 分页：切页后只有当前页在布局，标题跟着变
+    win._show_page("keys")
+    root.update()
+    check(win._active == "keys" and win._title.cget("text") == "快捷与交互",
+          "切到「快捷与交互」页")
+    check(bool(win._pages["keys"].winfo_manager())
+          and not win._pages["general"].winfo_manager(),
+          "切页后只有当前页在布局")
+    win._show_page("general")
+    root.update()
+
+    # 搜索：按标题/描述过滤本页设置卡
+    before = len([r for r in win._rows["general"] if r.winfo_manager()])
+    win._search.entry.insert(0, "剪贴板")
+    win._filter()
+    root.update()
+    hits = [r.title_text for r in win._rows["general"] if r.winfo_manager()]
+    check(before > len(hits) == 1 and "剪贴板" in hits[0],
+          "搜索过滤生效（命中 %s）" % (hits,))
+    win._search.clear()
+    win._filter()
+    root.update()
 
     # 模型必须是可下拉的 Combobox（之前是纯输入框，用户无法选择）
     check(type(win.model_e).__name__ == "CTkComboBox", "OCR 模型是可下拉框")
     check(hasattr(win, "refresh_models"), "支持从后端刷新模型列表")
     check(not hasattr(win, "layout_e"), "排版模型不再提供选择（固定用默认模型）")
 
-    check(win.model_e.get().strip() != "", "OCR 模型输入框有值")
-    check(win.url_e.get().startswith("http"), "Ollama 地址输入框有值")
+    check(win.model_e.get().strip() != "", "OCR 角色有模型名（%s）"
+          % win.model_e.get())
+    check(win.url_e.get().startswith("http"), "OCR 角色有 BaseURL（%s）"
+          % win.url_e.get())
+    check(len(win._models) == 3, "三个角色各有一份配置")
+    check(win._role == "ocr", "默认编辑 OCR 角色")
     check(win._hotkey_var.get() == cfg.get("hotkey"), "快捷键显示与配置一致")
 
     # 主题：点一下立即生效（不需要再点保存）
@@ -93,39 +122,83 @@ def test_settings(root):
     root.update()
     check(ctk.get_appearance_mode() == "Light", "主题可切回 Light")
 
+    # 选预置厂商 → BaseURL 自动填；切角色 → 字段跟着换
+    win._pick_provider("DeepSeek")
+    check(win.url_e.get() == "https://api.deepseek.com",
+          "选 DeepSeek 自动填 BaseURL（%s）" % win.url_e.get())
+    check(win._auth_row.hidden and win._stream_row.hidden,
+          "预置厂商不显示「鉴权头 / 流式」")
+    win._pick_provider("自定义 API")
+    root.update()
+    check(not win._auth_row.hidden and not win._stream_row.hidden,
+          "自定义 API 才显示「鉴权头 / 流式」")
+    check(bool(win._auth_row.winfo_manager()) and
+          bool(win._stream_row.winfo_manager()), "高级项显示后确实在布局里")
+    win._pick_provider("DeepSeek")
+    win._pick_role("主 LLM")
+    check(win._role == "main", "切到主 LLM 角色")
+    win._pick_role("OCR 模型")
+    check(win._role == "ocr" and win.url_e.get() == "https://api.deepseek.com",
+          "切回 OCR 角色后配置还在")
+    win._pick_provider("Ollama（本地）")
+    check(win.url_e.get().startswith("http://127.0.0.1"),
+          "切回 Ollama 自动填本地地址")
+
     win._save()
-    expect = {"ollama_url", "default_model", "theme", "image_dir",
+    expect = {"models", "theme", "image_dir",
               "export_dir", "save_image", "clipboard_image",
               "history_enabled", "beautify_bg"}
+    check(isinstance(saved.get("models"), dict)
+          and set(saved["models"]) == {"main", "ocr", "layout"},
+          "保存回传了三个角色的模型配置")
     check(expect <= set(saved), "保存回传了全部设置键")
     check("layout_model" not in saved, "保存不会改动排版模型（界面不提供）")
 
-    # 开机启动：等初始检查结束，再用桩跑勾选/取消（不动真实计划任务）
+    # 关于页：版本 + 检查更新 + 仓库入口
+    win._show_page("about")
+    root.update()
+    titles = [r.title_text for r in win._rows["about"]]
+    check("版本" in titles and "GitHub 仓库" in titles,
+          "关于页有版本与 GitHub 入口（%s）" % titles)
+    check(win.update_btn.cget("text") == "检查更新", "关于页有「检查更新」按钮")
+    repo_row = [r for r in win._rows["about"] if r.title_text == "GitHub 仓库"][0]
+    check("github.com/NANYAN-01/StarSnip" in repo_row.desc_text,
+          "仓库地址写对了")
+    win._show_page("general")
+    root.update()
+
+    # 开机启动：等初始体检结束，再用桩跑开启/关闭（不碰真实注册表）
     deadline = time.time() + 5
     while time.time() < deadline and win._autostart_busy:
         root.update()
         time.sleep(0.02)
     check(not win._autostart_busy, "开机启动初始状态检查完成")
-    check(hasattr(win, "autostart_cb"), "开机启动复选框已布局")
-    from starsnip import settings_ui
-    st = {"on": False}
-    saved_fns = (settings_ui.autostart.is_enabled,
-                 settings_ui.autostart.is_elevated,
-                 settings_ui.autostart.enable,
-                 settings_ui.autostart.disable)
-    settings_ui.autostart.is_enabled = lambda: st["on"]
-    settings_ui.autostart.is_elevated = lambda: True
+    check(hasattr(win, "autostart_cb"), "开机启动开关已布局")
+    check(hasattr(win, "startup_menu"), "启动方式下拉已布局")
 
-    def _fake_enable():
-        st["on"] = True
-        return True, "已创建计划任务"
+    from starsnip import startup as startup_mod
+    state = {"on": False}
 
-    def _fake_disable():
-        st["on"] = False
-        return True, "已删除计划任务"
+    def _fake_status():
+        return {"enabled": state["on"], "effective": state["on"],
+                "mode": "run" if state["on"] else "none", "warnings": [],
+                "policy": [], "task": False, "command": "",
+                "run": {"present": state["on"], "current": True,
+                        "approved": "enabled", "command": ""},
+                "folder": {"present": False, "approved": "unset", "path": ""}}
 
-    settings_ui.autostart.enable = _fake_enable
-    settings_ui.autostart.disable = _fake_disable
+    def _fake_enable(mode="auto"):
+        state["on"] = True
+        return True, "已启用：登录 Windows 后自动启动（注册表启动项）"
+
+    def _fake_disable(clean_task=True):
+        state["on"] = False
+        return True, "已关闭开机启动"
+
+    saved_fns = (startup_mod.status, startup_mod.enable, startup_mod.disable)
+    startup_mod.status = _fake_status
+    startup_mod.enable = _fake_enable
+    startup_mod.disable = _fake_disable
     try:
         win.autostart_cb.select()
         win._toggle_autostart()
@@ -133,21 +206,19 @@ def test_settings(root):
         while time.time() < deadline and win._autostart_busy:
             root.update()
             time.sleep(0.02)
-        check(st["on"] and "已创建" in win.autostart_status.cget("text"),
-              "勾选后创建计划任务：%s" % win.autostart_status.cget("text"))
+        check(state["on"] and "已启用" in win.autostart_status.cget("text"),
+              "开启后写入启动项：%s" % win.autostart_status.cget("text"))
         win.autostart_cb.deselect()
         win._toggle_autostart()
         deadline = time.time() + 3
         while time.time() < deadline and win._autostart_busy:
             root.update()
             time.sleep(0.02)
-        check(not st["on"] and "已删除" in win.autostart_status.cget("text"),
-              "取消勾选后删除计划任务：%s" % win.autostart_status.cget("text"))
+        check(not state["on"] and "已关闭" in win.autostart_status.cget("text"),
+              "关闭后移除启动项：%s" % win.autostart_status.cget("text"))
     finally:
-        (settings_ui.autostart.is_enabled,
-         settings_ui.autostart.is_elevated,
-         settings_ui.autostart.enable,
-         settings_ui.autostart.disable) = saved_fns
+        (startup_mod.status, startup_mod.enable,
+         startup_mod.disable) = saved_fns
     win.destroy()
 
 

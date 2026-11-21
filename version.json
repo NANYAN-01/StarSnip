@@ -1,0 +1,9 @@
+{
+  "version": "1.1.0",
+  "url": "https://github.com/NANYAN-01/StarSnip/releases/tag/v1.1.0",
+  "notes": "关于页：版本 / 检查更新 / GitHub 入口；开机启动改用注册表启动项（免 UAC）；自动更新",
+  "assets": {
+    "exe": "",
+    "sha256": ""
+  }
+}

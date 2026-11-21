@@ -43,7 +43,7 @@ CFG = {"hotkey": "ctrl+alt+o", "default_model": "glm-ocr:latest",
        "history_enabled": True, "image_dir": "", "export_dir": ""}
 
 
-def shot(win, name):
+def shot(win, name, keep=False):
     win.update_idletasks()
     # 必须置顶再截图：否则截到的是被别的窗口遮住的桌面内容
     try:
@@ -64,6 +64,8 @@ def shot(win, name):
     with open(out, "wb") as f:
         f.write(crop.to_png())
     print("saved", out, "%dx%d" % (w, h))
+    if keep:
+        return
     win.destroy()
     win.update_idletasks()
 
@@ -123,10 +125,25 @@ def main():
     hw._on_select()
     shot(hw, "04_history_dark")
 
-    # 5) SettingsWindow
+    # 5) SettingsWindow：逐页截图（深色），最后一张切浅色
     st = SettingsWindow(root, CFG, lambda v: None, lambda var: None)
-    st.geometry("+260+40")
-    shot(st, "05_settings_dark")
+    st.geometry("980x780+220+40")
+    for key, name in (("general", "05_settings_general_dark"),
+                      ("keys", "05b_settings_keys_dark"),
+                      ("backend", "05c_settings_backend_dark"),
+                      ("storage", "05d_settings_storage_dark"),
+                      ("about", "05e_settings_about_dark")):
+        st._show_page(key)
+        st.update()
+        shot(st, name, keep=True)
+    st._show_page("general")
+    theme.apply_theme("light")
+    st._pick_theme("light")
+    st.update()
+    shot(st, "05f_settings_general_light", keep=True)
+    theme.apply_theme("dark")
+    st._pick_theme("dark")
+    st.destroy()
 
     # 6) HotkeyDialog
     hk = HotkeyDialog(root, "ctrl+alt+o", lambda s: None)

@@ -27,6 +27,9 @@ tools/_icon_tmp/
 
 # 调试截图 / UI 探针产物
 tools/_shots/
+
+# 改动前的手工备份（本地留档，不入库）
+tools/_backup/
 fixtures/_capture_*.png
 
 # 本地私密配置（真实内网地址、个人路径等；只在本机生效，永不入库）

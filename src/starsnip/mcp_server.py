@@ -23,10 +23,12 @@ def screen_capture_ocr(region: str = "", prompt: str = "", model: str = "") -> s
         x, y, w, h = [int(v) for v in region.replace(" ", "").split(",")]
         img = img.crop(x - img.origin[0], y - img.origin[1], w, h)
     png = img.to_png_scaled(int(cfg.get("max_side_px", 1280)))
+    profile = dict(config.model_profile(cfg, "ocr"))
+    if model:
+        profile["model"] = model
     result = ocr_core.call(
-        png, model or cfg["default_model"], cfg["ollama_url"],
-        prompt=prompt or cfg.get("prompt", ocr_core.DEFAULT_PROMPT),
-        timeout=float(cfg.get("timeout_s", 60)))
+        png, prompt=prompt or cfg.get("prompt", ocr_core.DEFAULT_PROMPT),
+        profile=profile, timeout=float(cfg.get("timeout_s", 60)))
     if not result.get("ok"):
         raise RuntimeError(result.get("error") or "OCR failed")
     return result["text"]

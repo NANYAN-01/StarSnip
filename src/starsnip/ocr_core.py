@@ -6,7 +6,9 @@ import re
 import threading
 import urllib.request
 
-from . import tablefmt
+from . import llm, tablefmt
+
+OCR_SYSTEM = "You are an OCR engine. Output only the text found in the image."
 
 DEFAULT_PROMPT = (
     "请识别图片中的所有文字内容，按原样逐行输出，不要遗漏，不要翻译。"
@@ -47,64 +49,56 @@ def clean_grounding(text: str) -> str:
     return "\n".join(lines)
 
 
-def call(png_bytes: bytes, model: str, url: str, prompt: str = DEFAULT_PROMPT,
-         mode: str = "auto", timeout: float = 60.0,
-         keep_alive: str = "30m") -> dict:
-    api = pick_mode(model, mode)
+def _profile(model: str, url: str) -> dict:
+    """老调用方（只给 model + url）→ 一个 Ollama 角色配置。"""
+    return {"provider": "ollama", "base_url": url, "api_key": "",
+            "model": model or "", "timeout": 60, "stream": False}
+
+
+def call(png_bytes: bytes, model: str = None, url: str = None,
+         prompt: str = DEFAULT_PROMPT, mode: str = "auto",
+         timeout: float = 60.0, keep_alive: str = "30m",
+         profile: dict = None) -> dict:
+    """识别一张图。
+
+    profile 决定走哪家：Ollama 走原生接口（generate / chat 两模式），
+    云端一律 OpenAI 兼容的 chat/completions（图片以 data URL 传）。
+    """
+    profile = profile or _profile(model, url)
+    model = (profile.get("model") or model or "")
+    local = llm.is_ollama(profile)
+    api = pick_mode(model, mode) if local else "openai"
     img_b64 = base64.b64encode(png_bytes).decode("ascii")
-    options = {"temperature": 0.1, "num_predict": 4096}
-    if api == "chat":
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system",
-                 "content": "You are an OCR engine. Output only the text found in the image."},
-                {"role": "user", "content": "<image>\n" + prompt,
-                 "images": [img_b64]},
-            ],
-            "stream": False,
-            "options": options,
-            "keep_alive": keep_alive,
-        }
-        endpoint = url.rstrip("/") + "/api/chat"
-    else:
-        payload = {"model": model, "prompt": prompt, "images": [img_b64],
-                   "stream": False, "options": options,
-                   "keep_alive": keep_alive}
-        endpoint = url.rstrip("/") + "/api/generate"
 
     started = time_ms()
     result = {"model": model, "mode": api, "ok": False,
-              "text": "", "error": None, "elapsed_ms": 0}
+              "text": "", "error": None, "elapsed_ms": 0,
+              "provider": profile.get("provider") or "ollama"}
     try:
-        req = urllib.request.Request(
-            endpoint, data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json; charset=utf-8"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        if data.get("error"):
-            raise RuntimeError(data["error"])
-        if api == "chat":
-            text = (data.get("message") or {}).get("content", "")
-        else:
-            text = data.get("response", "")
-        text = clean_grounding(text.strip())
+        text = llm.generate(profile, prompt, system=OCR_SYSTEM,
+                            images=[img_b64], timeout=timeout,
+                            keep_alive=keep_alive, ollama_mode=api)
+        text = clean_grounding((text or "").strip())
         if not text:
             raise RuntimeError("empty response")
         result.update(ok=True, text=text)
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI
-        result["error"] = "%s: %s" % (type(exc).__name__, exc)
+        result["error"] = str(exc) if isinstance(exc, llm.LLMError) \
+            else "%s: %s" % (type(exc).__name__, exc)
     result["elapsed_ms"] = int(time_ms() - started)
     return result
 
 
-def call_many(png_bytes: bytes, models, url: str, prompt: str = DEFAULT_PROMPT,
-              timeout: float = 60.0, keep_alive: str = "30m") -> list:
+def call_many(png_bytes: bytes, models, url: str = None,
+              prompt: str = DEFAULT_PROMPT, timeout: float = 60.0,
+              keep_alive: str = "30m", profile: dict = None) -> list:
     results = [None] * len(models)
 
     def worker(idx, model):
-        results[idx] = call(png_bytes, model, url, prompt=prompt,
-                            timeout=timeout, keep_alive=keep_alive)
+        base = dict(profile or _profile(model, url))
+        base["model"] = model
+        results[idx] = call(png_bytes, prompt=prompt, timeout=timeout,
+                            keep_alive=keep_alive, profile=base)
 
     threads = [threading.Thread(target=worker, args=(i, m), daemon=True)
                for i, m in enumerate(models)]
@@ -167,6 +161,16 @@ def is_ocr_model(name: str, capabilities=None) -> bool:
     if caps and "vision" not in caps:
         return False
     return "ocr" in (name or "").lower()
+
+
+def list_candidates(profile: dict, timeout: float = 8.0) -> list:
+    """按角色配置拉候选模型：Ollama 走 /api/tags 过滤，云端走 /models。"""
+    if llm.is_ollama(profile):
+        return list_ocr_models((profile or {}).get("base_url") or "", timeout)
+    try:
+        return llm.list_models(profile, timeout=timeout)
+    except Exception:  # noqa: BLE001 - 拉不到就让人手填
+        return []
 
 
 def list_ocr_models(url: str, timeout: float = 6.0) -> list:

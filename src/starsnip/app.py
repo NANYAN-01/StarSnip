@@ -14,8 +14,8 @@ import traceback
 import customtkinter as ctk
 from tkinter import messagebox
 
-from . import (ai_writer, beautify, capture, clipboard_image, config, imgconv,
-               ocr_core, screenfiles, theme)
+from . import (__version__, ai_writer, beautify, capture, clipboard_image,
+               config, imgconv, ocr_core, screenfiles, theme, update)
 from .history import History
 from .history_ui import HistoryWindow
 from .hotkey import HotkeyManager
@@ -50,6 +50,9 @@ class App:
         self.hotkey_dialog = None
         self._pins = []
         self._pin_seq = 0
+        self._update_info = None      # 发现的新版本
+        self._update_file = None      # 已下载并校验的新 exe
+        self._update_busy = False
         self.last_source = "hotkey"
         self._polling = False
         self.history = (History(keep=int(cfg.get("history_keep", 500)))
@@ -57,9 +60,11 @@ class App:
         self.toast = Toast(root, int(cfg.get("toast_ms", 2000)))
         self.last_export = None
         self.log = Logger()
-        self.log.info("App created (config=%s, hotkey=%s, model=%s, theme=%s)"
+        ocr_profile = config.model_profile(cfg, "ocr")
+        self.log.info("App created (config=%s, hotkey=%s, ocr=%s/%s, theme=%s)"
                       % (config.CONFIG_PATH, cfg.get("hotkey"),
-                         cfg.get("default_model"), cfg.get("theme")))
+                         ocr_profile.get("provider"),
+                         ocr_profile.get("model"), cfg.get("theme")))
         self.root.report_callback_exception = self._on_tk_error
         theme.apply_theme(cfg.get("theme", "system"))
         self._set_window_icon()
@@ -104,15 +109,93 @@ class App:
 
     def start(self) -> None:
         capture.enable_dpi_awareness()
+        update.cleanup_old()          # 上次自动更新留下的 .old，起来后清掉
         self._start_hotkey()
         self._start_tray()
         self._ensure_poll()
+        self._schedule_update_check()
         if self.cfg.get("tray_toast", True):
             self.root.after(900, lambda: self.toast.show(
                 "%s · %s 截图识别 · %s 仅截图" % (
                     APP_LABEL, self.cfg.get("hotkey"),
                     self.cfg.get("hotkey_capture_only", "")),
                 int(self.cfg.get("toast_ms", 2000))))
+
+    # ---------- 版本更新 ----------
+    def _schedule_update_check(self, delay_ms: int = 3000) -> None:
+        """启动 3 秒后静默查一次；之后每 6 小时再查（缓存 24h 内不重复联网）。"""
+        if not self.cfg.get("update_check", True):
+            return
+        self.root.after(delay_ms, self._check_update)
+        self.root.after(6 * 3600 * 1000, self._schedule_update_check, 0)
+
+    def _check_update(self) -> None:
+        if self._update_busy or self._update_file:
+            return
+        if update.cache_fresh():
+            cached = update.read_cache()
+            latest = cached.get("latest") or ""
+            if latest and update.is_newer(latest):
+                self._on_update_checked({"ok": True, "newer": True,
+                                         "latest": latest,
+                                         "url": cached.get("url"),
+                                         "exe": cached.get("exe"),
+                                         "sha256": cached.get("sha256"),
+                                         "source": "cache"})
+            return
+        self._update_busy = True
+        threading.Thread(target=self._update_worker, daemon=True).start()
+
+    def _update_worker(self) -> None:
+        try:
+            info = update.check(self.cfg)
+        except Exception as exc:  # noqa: BLE001 - 更新失败绝不影响主功能
+            self.log.info("update check failed: %s" % exc)
+            info = {"ok": False}
+        self.events.put({"type": "update_checked", "info": info})
+
+    def _on_update_checked(self, info: dict) -> None:
+        self._update_busy = False
+        if not info.get("ok") or not info.get("newer"):
+            return
+        self._update_info = info
+        latest = str(info.get("latest") or "").lstrip("v")
+        self.log.info("update available: %s (source=%s)"
+                      % (latest, info.get("source")))
+        if not self.cfg.get("update_auto", True):
+            self.toast.show("星剪 v%s 可用 · 设置 → 关于 可查看" % latest, 3000)
+            return
+        self.toast.show("星剪 v%s 可用 · 正在后台下载" % latest, 3000)
+        threading.Thread(target=self._download_worker,
+                         args=(info,), daemon=True).start()
+
+    def _download_worker(self, info: dict) -> None:
+        result = update.download(info)
+        self.events.put({"type": "update_downloaded", "result": result,
+                         "info": info})
+
+    def _on_update_downloaded(self, result: dict, info: dict) -> None:
+        if not result.get("ok"):
+            self.log.info("update download failed: %s" % result.get("error"))
+            self.toast.show("更新下载失败 · 可在 设置 → 关于 手动打开下载页")
+            return
+        self._update_file = result["path"]
+        latest = str(info.get("latest") or "").lstrip("v")
+        self.log.info("update downloaded: %s -> %s"
+                      % (latest, result["path"]))
+        self.toast.show("星剪 v%s 已就绪 · 退出时自动更新" % latest, 4000)
+
+    def _apply_update_on_exit(self) -> None:
+        """退出前把下载好的新 exe 换上去，并安排重新启动。"""
+        if not self._update_file:
+            return
+        ok, detail = update.apply_pending(self._update_file)
+        if not ok:
+            self.log.info("update apply failed: %s" % detail)
+            return
+        self.log.info("update applied, backup=%s" % detail)
+        if not update.relaunch_after_exit():
+            self.log.info("update relaunch scheduling failed")
 
     def _ensure_poll(self) -> None:
         if not self._polling:
@@ -179,6 +262,7 @@ class App:
                 "托盘图标已在通知区域；若看不到请点时钟旁的 ^ 展开"))
 
     def shutdown(self) -> None:
+        self._apply_update_on_exit()
         for hk in (self.hotkey, getattr(self, "hotkey_only", None)):
             if hk:
                 hk.stop()
@@ -223,6 +307,11 @@ class App:
                             int(self.cfg.get("toast_ms", 2000)))
         elif kind == "exit":
             self.shutdown()
+        elif kind == "update_checked":
+            self._on_update_checked(event.get("info") or {})
+        elif kind == "update_downloaded":
+            self._on_update_downloaded(event.get("result") or {},
+                                       event.get("info") or {})
         elif kind == "ocr_done":
             self.busy = False
             result = event["result"]
@@ -350,6 +439,16 @@ class App:
 
     def _apply_settings(self, values: dict) -> None:
         for k, v in values.items():
+            if k == "models":
+                # 三模型配置（含 API Key）只写 config.local.json
+                try:
+                    config.save_models(v)
+                except OSError as exc:
+                    messagebox.showerror("保存设置", "models: %s" % exc)
+                    return
+                self.cfg["models"] = config.normalize_models(
+                    dict(self.cfg, models=v))
+                continue
             self.cfg[k] = v
             try:
                 config.save_setting(k, v)
@@ -450,15 +549,14 @@ class App:
 
     def _run_ocr(self, prompt_override=None, event_type="ocr_done") -> None:
         png = self.png
-        model = self.cfg.get("default_model") or ""
-        url = self.cfg["ollama_url"]
+        profile = config.model_profile(self.cfg, "ocr")
         prompt = prompt_override or self.cfg.get("prompt", ocr_core.DEFAULT_PROMPT)
         timeout = float(self.cfg.get("timeout_s", 60))
         keep_alive = self.cfg.get("keep_alive", "30m")
 
         def work():
             try:
-                result = ocr_core.call(png, model, url, prompt=prompt,
+                result = ocr_core.call(png, prompt=prompt, profile=profile,
                                        timeout=timeout, keep_alive=keep_alive)
             except Exception as exc:  # noqa: BLE001
                 self.events.put({"type": "error", "message": str(exc)})
@@ -525,7 +623,8 @@ class App:
             return
         # 主模型用当前选中的 OCR 模型，再补一个不同的模型做对照；
         # 否则改过 OCR 模型后「校验」仍拿老模型跑，结果对不上。
-        models = [self.cfg.get("default_model") or ""]
+        profile = config.model_profile(self.cfg, "ocr")
+        models = [profile.get("model") or ""]
         for model in (self.cfg.get("verify_models") or []):
             if model and model not in models:
                 models.append(model)
@@ -538,13 +637,12 @@ class App:
             return
         self.busy = True
         png = self.png
-        url = self.cfg["ollama_url"]
         prompt = self.cfg.get("prompt", ocr_core.DEFAULT_PROMPT)
         timeout = float(self.cfg.get("timeout_s", 60))
 
         def work():
-            results = ocr_core.call_many(png, models, url, prompt=prompt,
-                                         timeout=timeout)
+            results = ocr_core.call_many(png, models, prompt=prompt,
+                                         timeout=timeout, profile=profile)
             self.events.put({"type": "verify_done", "results": results})
 
         threading.Thread(target=work, daemon=True).start()
@@ -576,19 +674,19 @@ class App:
         if self.busy:
             return
         self.busy = True
-        model = (self.cfg.get("translate_model")
-                 or self.cfg.get("layout_model")
-                 or config.DEFAULTS["layout_model"])
-        url = self.cfg["ollama_url"]
+        # 翻译用「主 LLM」；主 LLM 没配模型时退回排版模型
+        profile = config.model_profile(self.cfg, "main")
+        if not (profile.get("model") or "").strip():
+            profile = config.model_profile(self.cfg, "layout")
         timeout = float(self.cfg.get("layout_timeout", 120))
         keep_alive = self.cfg.get("keep_alive", "30m")
         self.window.status_note("翻译中…")
 
         def work():
             try:
-                out, tgt = ai_writer.translate(text, model, url, "auto",
-                                               timeout=timeout,
-                                               keep_alive=keep_alive)
+                out, tgt = ai_writer.translate(text, "auto", timeout=timeout,
+                                               keep_alive=keep_alive,
+                                               profile=profile)
                 self.events.put({"type": "translate_done",
                                  "text": out, "target": tgt})
             except Exception as exc:  # noqa: BLE001
@@ -681,8 +779,7 @@ class App:
         if self.busy:
             return
         self.busy = True
-        model = self.cfg.get("layout_model") or config.DEFAULTS["layout_model"]
-        url = self.cfg["ollama_url"]
+        profile = config.model_profile(self.cfg, "layout")
         timeout = float(self.cfg.get("layout_timeout", 120))
         keep_alive = self.cfg.get("keep_alive", "30m")
         directory = self.cfg.get("export_dir") or None
@@ -692,8 +789,8 @@ class App:
         def work():
             try:
                 path, _md = ai_writer.export(
-                    text, fmt, model, url, directory=directory,
-                    timeout=timeout, keep_alive=keep_alive)
+                    text, fmt, directory=directory, timeout=timeout,
+                    keep_alive=keep_alive, profile=profile)
             except Exception as exc:  # noqa: BLE001
                 self.events.put({"type": "export_error",
                                  "message": "%s: %s"

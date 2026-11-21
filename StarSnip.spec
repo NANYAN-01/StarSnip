@@ -47,4 +47,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='assets/starsnip.ico',
+    # 属性页里能看到版本号（tools/set_version.py 生成，发版前同步）
+    version='StarSnip.version',
 )

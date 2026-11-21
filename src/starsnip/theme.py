@@ -47,6 +47,17 @@ RADIUS_PILL = 999
 PAD = 16
 CONTROL_H = 36
 
+# ---------- 设置中心（DeskBox 风格）令牌 ----------
+# 层次完全靠「底 → 卡片 → 描边」三档明度叠出来，不用投影：
+BG = ("#F4F4F7", "#141416")            # 窗口底，比卡片暗一档
+CARD_STROKE = ("#E4E4EA", "#2E2E34")   # 1px 卡片描边（深色约 12% 白）
+INPUT_BG = ("#F7F7FA", "#191A1D")      # 输入框 / 下拉框底
+NAV_SEL = ("#ECE7FF", "#26232F")       # 导航选中底（强调色的低饱和变体）
+ROW_GAP = 4                            # 卡片之间的缝（不是分割线）
+ROW_H = 64                             # 设置卡最小高度
+NAV_W = 214                            # 左导航轨宽度
+RADIUS_CARD = 6                        # 卡片 / 按钮圆角
+
 # 分段按钮统一配色（否则 CTk 默认主题的蓝色会和品牌紫冲突）
 SEG_STYLE = {
     "selected_color": ACCENT,
@@ -119,6 +130,30 @@ def font(size: int = 14, weight: str = "normal", mono: bool = False) -> ctk.CTkF
     return ctk.CTkFont(family=family, size=size, weight=weight)
 
 
+# Segoe Fluent Icons（Win11）→ Segoe MDL2 Assets（Win10）→ 系统默认字体
+_GLYPH_FAMILIES = ("Segoe Fluent Icons", "Segoe MDL2 Assets")
+
+
+def glyph_font(size: int = 18) -> ctk.CTkFont:
+    """图标字体：Win11/Win10 自带的 Fluent 字形，无需打包图标资源。
+
+    没有这两套字体的机器（如精简系统）退回 Segoe UI，字形会显示成方框，
+    但不影响布局与点击。
+    """
+    family = "Segoe UI"
+    try:
+        import tkinter.font as tkfont
+
+        have = set(tkfont.families())
+        for name in _GLYPH_FAMILIES:
+            if name in have:
+                family = name
+                break
+    except Exception:  # noqa: BLE001 - 拿不到字体表就用默认字体
+        pass
+    return ctk.CTkFont(family=family, size=size)
+
+
 class Fonts:
     """在根窗口创建之后再实例化（CTkFont 需要默认 root）。
 
@@ -132,6 +167,18 @@ class Fonts:
         self.small = font(12)
         self.mono = font(13, mono=True)
         self.mono_big = font(20, "bold", mono=True)
+        # 设置中心字阶：28 页面标题 / 15 小节 / 14 卡标题 / 12 描述 / 11 辅助
+        # 只有 Regular 与 Bold 两档（Tk 只认 normal|bold，不做半粗）
+        self.display = font(28, "bold")
+        self.section = font(15, "bold")
+        self.card = font(14)
+        self.card_bold = font(14, "bold")
+        self.desc = font(12)
+        self.caption = font(11)
+        self.nav = font(14)
+        self.nav_bold = font(14, "bold")
+        self.glyph = glyph_font(18)
+        self.glyph_sm = glyph_font(15)
 
 
 

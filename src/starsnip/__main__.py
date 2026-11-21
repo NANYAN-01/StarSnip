@@ -71,7 +71,13 @@ def _run_gui(cfg: dict, args) -> int:
         root.mainloop()
         return 0
 
-    app.start()
+    if args.startup:
+        # 登录启动：等 Explorer 桌面/托盘就绪再挂热键与托盘图标，
+        # 否则在低配机器上会和资源管理器的启动流程抢资源
+        app.log.info("startup launch (login autostart)")
+        root.after(1200, app.start)
+    else:
+        app.start()
     print("星剪 StarSnip 已启动：按 %s 截图识别，Esc 取消，托盘右键可设置。"
           % cfg["hotkey"])
     try:
@@ -99,6 +105,8 @@ def main(argv=None) -> int:
                         help="直接打开历史记录窗口")
     parser.add_argument("--settings", action="store_true",
                         help="直接打开设置窗口")
+    parser.add_argument("--startup", action="store_true",
+                        help="由登录启动项拉起（稍等桌面就绪再挂托盘/热键）")
     parser.add_argument("--mcp", action="store_true",
                         help="以 MCP stdio 服务运行（需 mcp<2）")
     parser.add_argument("--tray-test", action="store_true",

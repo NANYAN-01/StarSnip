@@ -25,5 +25,9 @@
   "pin_alpha": 1.0,
   "beautify_bg": "white",
   "beautify_pad_ratio": 0.08,
-  "beautify_radius_ratio": 0.025
+  "beautify_radius_ratio": 0.025,
+  "update_check": true,
+  "update_url": "",
+  "update_auto": true,
+  "startup_mode": "auto"
 }

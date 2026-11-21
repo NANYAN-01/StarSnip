@@ -6,6 +6,11 @@
 
 **截图 → 框选 → OCR 识别 → 编辑 / 翻译 / 贴图 / 美化导出** 的 Windows 桌面小工具
 
+按一下就截图，框一下就有文字
+
+[![release](https://img.shields.io/badge/release-1.1.0-6C5CE7)](https://github.com/NANYAN-01/StarSnip/releases)
+[![license](https://img.shields.io/badge/license-MIT-6C5CE7)](LICENSE)
+
 现代简约界面（customtkinter）· 本地/内网 Ollama 识别 · 单文件可打包
 
 </div>
@@ -14,11 +19,33 @@
 
 星剪是一款常驻系统托盘的截图 OCR 工具：按下全局热键框选屏幕区域，自动识别其中的文字，
 在浮窗里编辑、复制，一键**翻译**、**贴图钉屏**、生成**美化分享图**，或经 AI 排版导出为
-Word / TXT / XLSX / Markdown。识别与排版走后端 Ollama（默认本机 `http://127.0.0.1:11434`，可在设置里改成你自己的主机），可离线、可换模型。
+Word / TXT / XLSX / Markdown。
+
+模型接入支持**本地 Ollama 与云端 OpenAI 兼容服务**：OCR、主 LLM（翻译）、排版布局三个角色可以各选各的厂商，互不绑定。
+
+| 厂商 | 预置 BaseURL | 说明 |
+|---|---|---|
+| Ollama（本地） | `http://127.0.0.1:11434` | 免 Key；OCR 建议 `glm-ocr` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` / `deepseek-reasoner` |
+| Kimi（Moonshot） | `https://api.moonshot.cn/v1` | OpenAI 兼容 |
+| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 视觉模型如 `qwen-vl-max` |
+| 腾讯 TokenHub | `https://tokenhub.tencentmaas.com/v1` | 模型名按模型广场填 |
+| 火山方舟 | `https://ark.cn-beijing.volces.com/api/v3` | 模型名或接入点 `ep-xxx` |
+| 自定义 API | 自己填 | BaseURL / 鉴权头 / 模型名全开放 |
+
+选中厂商会自动填 BaseURL（仍可改成其他地域或代理）；API Key 只写在本机 `config.local.json`，不会进仓库。
 
 默认两个热键：**`Ctrl+2` 截图并识别**；**`Ctrl+1` 只截图**（拖完停留，点 ✓ 才保存/进剪贴板，点 ✕ 放弃）。两个热键都能在设置里改。
 
 > 本项目由早期的个人工具 ScreenOCR 全面改版而来：重命名、UI 重写、新增功能、统一设计系统。
+
+## 下载与更新
+
+- 下载：<https://github.com/NANYAN-01/StarSnip/releases> —— 单文件 `StarSnip.exe`，免安装，丢在一个固定目录即可。
+- 自动更新：启动后静默检查（24 小时内不重复联网），发现新版本就后台下载并校验 SHA256，**退出时自动替换并重启**；也可以在「设置 → 关于」里手动检查。
+- 关掉自动替换：`config.json` 里把 `update_auto` 设为 `false`（只提示，不下载）。
+- 自建更新源（内网/OSS 都行）：`config.local.json` 里填 `"update_url": "https://你的地址/version.json"`，清单格式见仓库根的 `version.json`。
+- 升级时旧版本会保留成 `StarSnip.exe.old`，启动成功后自动删除。
 
 ## 界面预览
 
