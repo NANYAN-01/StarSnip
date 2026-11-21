@@ -4,6 +4,6 @@
     "notes":  "关于页：版本 / 检查更新 / GitHub 入口；开机启动改用注册表启动项（免 UAC）；自动更新",
     "assets":  {
                    "exe":  "https://github.com/NANYAN-01/StarSnip/releases/download/v1.1.0/StarSnip.exe",
-                   "sha256":  "aacbd41278f028b5e770b49e3e61c1d02ed7965ac7f9a8d2ddcfd9f617d8288b"
+                   "sha256":  "60551d68c29b00d6cbbe943c22c450afa53ff7ee303503cf1ef8f67625dd73ab"
                }
 }
