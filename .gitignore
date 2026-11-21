@@ -37,3 +37,6 @@ config.local.json
 
 # 旧实验/压测目录（含内网主机信息，不公开）
 ocr/
+
+# 工具生成的临时结果文件
+.qwenwork-media-result-*.json
